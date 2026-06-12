@@ -1,0 +1,23 @@
+{
+  "name": "rag-chatbot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "ingest": "node ingest.js",
+    "query": "node query.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.17.0",
+    "chromadb": "^3.4.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "langchain": "^1.4.4",
+    "pdf-parse": "^2.4.5"
+  }
+}

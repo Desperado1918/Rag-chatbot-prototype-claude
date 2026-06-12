@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Chatbot</title>
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+    <main class="app">
+        <section class="chat">
+            <header class="chat-header">
+                <div>
+                    <h1>RAG Chatbot</h1>
+                    <p>Ask questions from your uploaded notes.</p>
+                </div>
+                <span class="status" id="status">Ready</span>
+            </header>
+
+            <div class="messages" id="messages">
+                <div class="message bot">
+                    Hi, ask me something from your documents.
+                </div>
+            </div>
+
+            <form class="composer" id="chatForm">
+                <input
+                    id="messageInput"
+                    type="text"
+                    autocomplete="off"
+                    placeholder="Type your question..."
+                    required
+                >
+                <button type="submit">Send</button>
+            </form>
+        </section>
+    </main>
+
+    <script src="./script.js"></script>
+</body>
+</html>
