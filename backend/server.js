@@ -3,9 +3,21 @@ const cors = require("cors");
 const { askQuestion } = require("../query");
 
 const app = express();
+const PORT = 3000;
 
 app.use(cors());
 app.use(express.json());
+
+function getUserMessage(req) {
+    return req.body.message?.trim();
+}
+
+function sendError(res, error) {
+    res.status(error.statusCode || 500).json({
+        error: error.message || "Something went wrong",
+        sources: []
+    });
+}
 
 app.get("/", (req, res) => {
     res.json({
@@ -15,11 +27,12 @@ app.get("/", (req, res) => {
 
 app.post("/chat", async (req, res) => {
     try {
-        const userMessage = req.body.message;
+        const userMessage = getUserMessage(req);
 
-        if (!userMessage || !userMessage.trim()) {
+        if (!userMessage) {
             return res.status(400).json({
-                error: "Message is required"
+                error: "Message is required",
+                sources: []
             });
         }
 
@@ -32,13 +45,10 @@ app.post("/chat", async (req, res) => {
 
     } catch (error) {
         console.error(error);
-
-        res.status(error.statusCode || 500).json({
-            error: error.message || "Something went wrong"
-        });
+        sendError(res, error);
     }
 });
 
-app.listen(3000, () => {
-    console.log("Server running on port 3000");
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });

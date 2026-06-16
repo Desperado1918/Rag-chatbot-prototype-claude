@@ -1,61 +1,167 @@
 const fs = require("fs");
+const path = require("path");
 const { PDFParse } = require("pdf-parse");
 const axios = require("axios");
 const { ChromaClient } = require("chromadb");
 
-async function main() {
-    // Read PDF
-    const dataBuffer = fs.readFileSync("./documents/notes.pdf");
+const OLLAMA_URL = "http://127.0.0.1:11434";
+const CHROMA_URL = "http://localhost:8000";
+const COLLECTION_NAME = "notes";
+const EMBEDDING_MODEL = "nomic-embed-text";
+const DOCUMENT_PATH = "./documents/notes.pdf";
+const CHUNK_SIZE = 1000;
+const CHUNK_OVERLAP = 150;
+const SEPARATORS = ["\n\n", "\n", ". ", " ", ""];
 
+async function loadPdfText(filePath) {
+    const dataBuffer = fs.readFileSync(filePath);
     const parser = new PDFParse({ data: dataBuffer });
-
     const pdfData = await parser.getText();
 
-    const text = pdfData.text;
+    return pdfData.text.replace(/\r\n/g, "\n").trim();
+}
 
-    console.log("PDF Loaded");
-    console.log("Characters:", text.length);
-
-    // Chunking with overlap keeps nearby context available during retrieval.
-    const chunkSize = 1000;
-    const chunkOverlap = 200;
-    const chunkStep = chunkSize - chunkOverlap;
+function splitByCharacterCount(text, chunkSize) {
     const chunks = [];
 
-    for (let i = 0; i < text.length; i += chunkStep) {
-        chunks.push(text.slice(i, i + chunkSize));
+    for (let i = 0; i < text.length; i += chunkSize) {
+        chunks.push(text.slice(i, i + chunkSize).trim());
     }
 
-    console.log("Chunks:", chunks.length);
+    return chunks.filter(Boolean);
+}
 
-    // Connect Chroma
+function recursiveSplit(text, separators = SEPARATORS) {
+    const cleanText = text.trim();
+
+    if (!cleanText) {
+        return [];
+    }
+
+    if (cleanText.length <= CHUNK_SIZE) {
+        return [cleanText];
+    }
+
+    const [separator, ...nextSeparators] = separators;
+
+    if (separator === "") {
+        return splitByCharacterCount(cleanText, CHUNK_SIZE);
+    }
+
+    const parts = cleanText
+        .split(separator)
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+    const chunks = [];
+    let current = "";
+
+    for (const part of parts) {
+        const next = current ? `${current}${separator}${part}` : part;
+
+        if (next.length <= CHUNK_SIZE) {
+            current = next;
+            continue;
+        }
+
+        if (current) {
+            chunks.push(current);
+            current = "";
+        }
+
+        if (part.length > CHUNK_SIZE) {
+            chunks.push(...recursiveSplit(part, nextSeparators));
+        } else {
+            current = part;
+        }
+    }
+
+    if (current) {
+        chunks.push(current);
+    }
+
+    return chunks;
+}
+
+function addChunkOverlap(chunks) {
+    const overlappedChunks = [];
+    let previousChunk = "";
+
+    for (const chunk of chunks) {
+        if (!previousChunk) {
+            overlappedChunks.push(chunk);
+            previousChunk = chunk;
+            continue;
+        }
+
+        const overlap = previousChunk.slice(-CHUNK_OVERLAP);
+        const chunkWithOverlap = `${overlap}\n${chunk}`.slice(0, CHUNK_SIZE);
+        overlappedChunks.push(chunkWithOverlap);
+        previousChunk = chunkWithOverlap;
+    }
+
+    return overlappedChunks;
+}
+
+function createChunks(text) {
+    const recursiveChunks = recursiveSplit(text);
+
+    return addChunkOverlap(recursiveChunks);
+}
+
+async function createEmbedding(text) {
+    const embeddingResponse = await axios.post(`${OLLAMA_URL}/api/embeddings`, {
+        model: EMBEDDING_MODEL,
+        prompt: text
+    });
+
+    return embeddingResponse.data.embedding;
+}
+
+async function resetCollection() {
     const client = new ChromaClient({
-        path: "http://localhost:8000"
+        path: CHROMA_URL
     });
 
-    const collection = await client.getOrCreateCollection({
-        name: "notes"
-    });
+    try {
+        await client.deleteCollection({
+            name: COLLECTION_NAME
+        });
+        console.log(`Reset existing Chroma collection: ${COLLECTION_NAME}`);
+    } catch (error) {
+        console.log(`Creating new Chroma collection: ${COLLECTION_NAME}`);
+    }
 
+    return client.getOrCreateCollection({
+        name: COLLECTION_NAME
+    });
+}
+
+async function ingestDocument(filePath) {
+    const sourceFilename = path.basename(filePath);
+    const text = await loadPdfText(filePath);
+    const chunks = createChunks(text);
+    const collection = await resetCollection();
+
+    console.log("PDF loaded:", sourceFilename);
+    console.log("Characters:", text.length);
+    console.log("Chunks:", chunks.length);
     console.log("Connected to Chroma");
 
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
+        const embedding = await createEmbedding(chunk);
 
-        const embeddingResponse = await axios.post(
-            "http://127.0.0.1:11434/api/embeddings",
-            {
-                model: "nomic-embed-text",
-                prompt: chunk
-            }
-        );
-
-        const embedding = embeddingResponse.data.embedding;
-
-        await collection.add({
-            ids: [`chunk-${i}`],
+        await collection.upsert({
+            ids: [`${sourceFilename}-chunk-${i + 1}`],
             embeddings: [embedding],
-            documents: [chunk]
+            documents: [chunk],
+            metadatas: [
+                {
+                    source: sourceFilename,
+                    chunkNumber: i + 1
+                }
+            ]
         });
 
         console.log(`Stored chunk ${i + 1}/${chunks.length}`);
@@ -64,4 +170,17 @@ async function main() {
     console.log("DONE");
 }
 
-main().catch(console.error);
+async function main() {
+    await ingestDocument(DOCUMENT_PATH);
+}
+
+if (require.main === module) {
+    main().catch(console.error);
+}
+
+module.exports = {
+    createChunks,
+    ingestDocument,
+    recursiveSplit,
+    resetCollection
+};
