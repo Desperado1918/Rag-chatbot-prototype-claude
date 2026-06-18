@@ -14,7 +14,15 @@
                     <h1>RAG Chatbot</h1>
                     <p>Ask questions from your uploaded notes.</p>
                 </div>
-                <span class="status" id="status">Ready</span>
+                <div class="controls">
+                    <label for="chunkingMethod">Chunking</label>
+                    <select id="chunkingMethod">
+                        <option value="hierarchical" selected>Hierarchical</option>
+                        <option value="standard">Standard</option>
+                    </select>
+                    <button type="button" id="ingestButton">Ingest</button>
+                    <span class="status" id="status">Ready</span>
+                </div>
             </header>
 
             <div class="messages" id="messages">

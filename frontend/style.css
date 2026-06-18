@@ -61,6 +61,27 @@ p {
     font-size: 13px;
 }
 
+.controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.controls label {
+    color: #667085;
+    font-size: 13px;
+}
+
+select {
+    height: 36px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 0 10px;
+    background: #ffffff;
+    color: #172033;
+    font-size: 14px;
+}
+
 .messages {
     display: flex;
     flex-direction: column;
