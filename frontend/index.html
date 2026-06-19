@@ -3,43 +3,105 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RAG Chatbot</title>
+    <meta name="description" content="Local RAG Chatbot — Ask questions from your ingested research documents using a fully local AI pipeline.">
+    <title>RAG Chatbot — Local AI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./style.css">
 </head>
 <body>
+    <div class="bg-grid" aria-hidden="true"></div>
+
     <main class="app">
-        <section class="chat">
-            <header class="chat-header">
-                <div>
-                    <h1>RAG Chatbot</h1>
-                    <p>Ask questions from your uploaded notes.</p>
-                </div>
-                <div class="controls">
-                    <label for="chunkingMethod">Chunking</label>
-                    <select id="chunkingMethod">
-                        <option value="hierarchical" selected>Hierarchical</option>
-                        <option value="standard">Standard</option>
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <span class="brand-icon" aria-hidden="true">⬡</span>
+                <span class="brand-name">RAG<em>local</em></span>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-section-label">Pipeline</div>
+                <div class="control-group">
+                    <label class="control-label" for="chunkingMethod">Chunking Mode</label>
+                    <select id="chunkingMethod" class="select-input">
+                        <option value="hierarchical" selected>Hierarchical (Parent/Child)</option>
+                        <option value="standard">Standard (Flat)</option>
                     </select>
-                    <button type="button" id="ingestButton">Ingest</button>
-                    <span class="status" id="status">Ready</span>
+                </div>
+
+                <button type="button" id="ingestButton" class="btn btn-ingest">
+                    <span class="btn-icon" aria-hidden="true">↑</span>
+                    Ingest Document
+                </button>
+
+                <div class="status-row">
+                    <span class="status-dot" id="statusDot" aria-hidden="true"></span>
+                    <span class="status-text" id="status">Ready</span>
+                </div>
+            </nav>
+
+            <div class="sidebar-info">
+                <div class="info-card">
+                    <div class="info-title">Model</div>
+                    <div class="info-value mono">llama3.1:8b</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-title">Embeddings</div>
+                    <div class="info-value mono">nomic-embed-text</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-title">Threshold</div>
+                    <div class="info-value mono">≥ 0.45 similarity</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Chat Panel -->
+        <section class="chat" aria-label="Chat interface">
+            <header class="chat-header">
+                <div class="header-left">
+                    <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar" aria-expanded="true">☰</button>
+                    <div>
+                        <h1 class="chat-title">RAG Research Assistant</h1>
+                        <p class="chat-subtitle">Grounded answers from your local document corpus</p>
+                    </div>
+                </div>
+                <div class="header-badge">
+                    <span class="pulse-dot" aria-hidden="true"></span>
+                    <span>Local &amp; Private</span>
                 </div>
             </header>
 
-            <div class="messages" id="messages">
-                <div class="message bot">
-                    Hi, ask me something from your documents.
+            <div class="messages" id="messages" role="log" aria-live="polite" aria-label="Conversation">
+                <div class="message bot welcome-message" role="article">
+                    <div class="message-avatar bot-avatar" aria-hidden="true">AI</div>
+                    <div class="message-body">
+                        <div class="message-text">
+                            Hello! I'm your RAG research assistant. I can answer questions based on your ingested documents — such as topics on <strong>retrieval strategies</strong>, <strong>chunking methods</strong>, <strong>embedding models</strong>, and <strong>benchmark evaluations</strong>.
+                            <br><br>
+                            To get started, click <strong>Ingest Document</strong> in the sidebar, then ask your question below.
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <form class="composer" id="chatForm">
-                <input
-                    id="messageInput"
-                    type="text"
-                    autocomplete="off"
-                    placeholder="Type your question..."
-                    required
-                >
-                <button type="submit">Send</button>
+            <form class="composer" id="chatForm" aria-label="Ask a question">
+                <div class="composer-inner">
+                    <input
+                        id="messageInput"
+                        type="text"
+                        autocomplete="off"
+                        placeholder="Ask a question about the RAG paper…"
+                        required
+                        aria-label="Your question"
+                    >
+                    <button type="submit" id="sendButton" aria-label="Send message">
+                        <span class="send-icon" aria-hidden="true">➤</span>
+                    </button>
+                </div>
+                <div class="composer-hint">Answers are grounded in document context only — no hallucination.</div>
             </form>
         </section>
     </main>

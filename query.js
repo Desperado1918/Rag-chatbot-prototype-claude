@@ -3,7 +3,7 @@
 // ============================================================================
 // Retrieval:   ChromaDB cosine similarity search (local)
 // Embeddings:  Ollama nomic-embed-text (local)
-// Generation:  Ollama Llama 3.2:3b (local)
+// Generation:  Ollama Llama 3.1:8b (local)
 // Prompting:   Strict context-bound reading comprehension — NO hallucination
 // ============================================================================
 
@@ -18,20 +18,18 @@ const { getCollectionName, normalizeChunkingMethod } = require("./ingest");
 const OLLAMA_URL = "http://127.0.0.1:11434";
 const CHROMA_URL = "http://localhost:8000";
 const EMBEDDING_MODEL = "nomic-embed-text";
-const CHAT_MODEL = "llama3.2:3b";
-const RETRIEVAL_COUNT = 4;
+const CHAT_MODEL = "llama3.1:8b";
+const RETRIEVAL_COUNT = 12;          // Fetch extra candidates so rank+slice has strong pool to work from
+const TOP_N_CHUNKS = 5;              // Keep top 5 highest-similarity chunks — enough for a dense RAG paper
 const OLLAMA_CONTEXT_WINDOW = 8192;
 
 // ---------------------------------------------------------------------------
-// REQUIREMENT 4: Cosine Similarity Threshold
+// Advanced RAG: Cosine Similarity Threshold
 // ---------------------------------------------------------------------------
-// With cosine distance configured in ChromaDB, distances range from 0 (identical)
-// to 2 (opposite). We convert to similarity via: similarity = 1 - distance.
-// A threshold of 0.30 means we reject any hit with less than 30% cosine
-// similarity, filtering out irrelevant noise before it reaches the LLM.
-// ---------------------------------------------------------------------------
-
-const SIMILARITY_THRESHOLD = 0.30;
+// Raised to 0.40 — high enough to block off-topic noise, but permissive
+// enough not to accidentally discard all chunks when PDF noise is present.
+// If the LLM still sees 0 context chunks, it returns SAFE_UNKNOWN_ANSWER.
+const SIMILARITY_THRESHOLD = 0.40;
 
 // The exact refusal string the model should output when context is insufficient
 const SAFE_UNKNOWN_ANSWER = "I don't know based on the provided documents.";
@@ -332,9 +330,25 @@ function logRetrievedChunks(rawHits, filteredHits, contextChunks, chunkingMethod
 /**
  * Format context chunks into a labeled, delimited context string.
  * Each chunk gets a numbered label with its source and similarity score.
+ *
+ * [ADVANCED RAG — Objective 4] Before rendering, re-sort chunks by their
+ * original document position (chunkNumber for standard, parentNumber for
+ * hierarchical). LLMs perform better when context is presented in
+ * chronological/document order rather than similarity-ranked order.
  */
 function buildContext(chunks) {
-    return chunks
+    // [ADVANCED RAG — Obj 4] Re-sort by document order so the LLM receives
+    // context in the same sequence it appeared in the source document.
+    const documentOrdered = [...chunks].sort((a, b) => {
+        // Use parentNumber for hierarchical chunks, chunkNumber for standard
+        const posA =
+            a.metadata.parentNumber ?? a.metadata.chunkNumber ?? Infinity;
+        const posB =
+            b.metadata.parentNumber ?? b.metadata.chunkNumber ?? Infinity;
+        return posA - posB;
+    });
+
+    return documentOrdered
         .map((chunk, index) => {
             const source = chunk.metadata.source || "unknown";
             const label =
@@ -348,32 +362,45 @@ function buildContext(chunks) {
 }
 
 /**
- * Build the full prompt with strict reading comprehension instructions.
- * Uses clear section delimiters to prevent prompt confusion in Llama 3.2.
+ * Build the full prompt, engineered for Llama 3.1:8b operating over
+ * the "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" paper.
+ *
+ * Anti-hallucination design:
+ *  - Names the document explicitly so the model knows its exact scope
+ *  - FORBIDS use of any knowledge not in the CONTEXT blocks
+ *  - Instructs verbatim-or-close quoting rather than paraphrasing from memory
+ *  - Provides a hard refusal string for anything not found in CONTEXT
+ *  - Requires source citation after every answer
+ *  - Uses unambiguous delimiters (=== lines) to prevent prompt injection
  *
  * @param {string} question - The user's question.
  * @param {Object[]} chunks - Context chunks to include.
  * @returns {string} - Complete prompt string.
  */
 function buildPrompt(question, chunks) {
-    return `### SYSTEM INSTRUCTIONS
-You are a strict reading comprehension assistant. Your ONLY job is to answer questions by analyzing the CONTEXT passages provided below.
+    return `[INST] <<SYS>>
+You are a precise, document-bound Q&A assistant. The ONLY document you have access to is the academic paper:
+"Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" (Lewis et al., 2021).
 
-RULES YOU MUST FOLLOW:
-1. You are absolutely FORBIDDEN from using any outside knowledge, training data, or general knowledge to answer questions.
-2. You may ONLY use information that is EXPLICITLY stated in the CONTEXT sections below.
-3. If the answer to the question is NOT found in the CONTEXT, you MUST respond with EXACTLY this phrase and nothing else: "${SAFE_UNKNOWN_ANSWER}"
-4. Do NOT speculate, infer beyond what is written, or synthesize information from outside the provided CONTEXT.
-5. When answering, reference which Context Source(s) support your answer.
-6. Keep your answers precise and grounded in the exact wording of the CONTEXT.
+The CONTEXT below contains exact excerpts from that paper. Your entire answer MUST come from these excerpts.
 
-### CONTEXT
+ABSOLUTE RULES — breaking any rule makes your answer invalid:
+1. NEVER use knowledge from your training data. ONLY answer using the CONTEXT excerpts below.
+2. If the question cannot be answered from the CONTEXT, output this exact sentence and nothing else:
+   "${SAFE_UNKNOWN_ANSWER}"
+3. Do NOT invent names, numbers, model names, results, or claims not explicitly written in the CONTEXT.
+4. Quote or closely paraphrase only what is written in the CONTEXT. Do not elaborate.
+5. After your answer, write: "[Source: <number(s)>]" citing which context blocks you used.
+6. Use bullet points for lists. Be concise.
+<</SYS>>
+
+=== CONTEXT EXCERPTS FROM THE PAPER ===
 ${buildContext(chunks)}
+=== END CONTEXT ===
 
-### QUESTION
-${question}
+Question: ${question}
 
-### ANSWER`;
+Answer based solely on the context above: [/INST]`;
 }
 
 /**
@@ -415,11 +442,25 @@ async function prepareAnswer(question, options = {}) {
     // Step 1: Retrieve top-K vector hits from ChromaDB
     const rawHits = await retrieveVectorHits(question, chunkingMethod);
 
-    // Step 2: Apply cosine similarity threshold gate
+    // Step 2: [ADVANCED RAG — Objective 2] Apply cosine similarity threshold gate
+    // IMMEDIATELY after retrieval. Any hit below SIMILARITY_THRESHOLD is discarded
+    // right here before it can pollute ranking, parent expansion, or the LLM prompt.
     const filteredHits = applySimilarityGate(rawHits);
 
-    // Step 3: Expand to parent context (hierarchical) or dedupe (standard)
-    const contextChunks = buildContextChunks(filteredHits, chunkingMethod);
+    // Step 3: [ADVANCED RAG — Objective 3] Rank filtered hits by cosine similarity
+    // (highest first) and slice to the top N. This prevents lower-quality chunks
+    // from consuming LLM context window space.
+    const rankedHits = [...filteredHits]
+        .sort((a, b) => b.similarity - a.similarity)   // highest similarity first
+        .slice(0, TOP_N_CHUNKS);                        // keep only top N
+
+    console.log(
+        `[Rank & Slice] ${filteredHits.length} filtered hits → top ${rankedHits.length} ` +
+        `(threshold=${SIMILARITY_THRESHOLD}, topN=${TOP_N_CHUNKS})`
+    );
+
+    // Step 4: Expand to parent context (hierarchical) or dedupe (standard)
+    const contextChunks = buildContextChunks(rankedHits, chunkingMethod);
 
     // Log retrieval diagnostics
     logRetrievedChunks(rawHits, filteredHits, contextChunks, chunkingMethod);
@@ -477,7 +518,9 @@ async function streamOllamaAnswer(prompt, handlers = {}) {
                 prompt,
                 stream: true,
                 options: {
-                    temperature: 0.0,
+                    temperature: 0.0,    // Fully deterministic — no sampling randomness
+                    top_p: 0.1,          // Only consider top 10% probability mass per token
+                    repeat_penalty: 1.15, // Penalise repetition / looping on thin context
                     num_ctx: OLLAMA_CONTEXT_WINDOW
                 }
             },

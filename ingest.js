@@ -21,10 +21,12 @@ const CHROMA_URL = "http://localhost:8000";
 const EMBEDDING_MODEL = "nomic-embed-text";
 const DOCUMENT_PATH = "./documents/notes.pdf";
 
-// Chunking parameters — tuned for academic paper density
-const STANDARD_CHUNK_SIZE = 1000;
-const PARENT_CHUNK_SIZE = 1800;   // ~1500-2000 chars for deep academic context
-const CHILD_CHUNK_SIZE = 450;     // ~400-500 chars for precise vector search
+// Chunking parameters — tuned for this RAG academic paper
+// Larger parents ensure complete paragraphs stay together for LLM context.
+// Larger children give the embedding model enough semantic signal per vector.
+const STANDARD_CHUNK_SIZE = 1200;
+const PARENT_CHUNK_SIZE = 2200;   // Increased: keeps full paragraphs + adjacent context
+const CHILD_CHUNK_SIZE = 500;     // Increased: richer per-vector semantic density
 
 // Separator priority for boundary-safe splitting (most preferred first)
 const SEPARATORS = ["\n\n", "\n", ". ", " "];
@@ -154,13 +156,13 @@ async function loadPdfText(filePath) {
             // Determine if this row spans across the column boundary
             const minX = sortedRow[0].x;
             const maxX = sortedRow[sortedRow.length - 1].x +
-                         (sortedRow[sortedRow.length - 1].width || 0);
+                (sortedRow[sortedRow.length - 1].width || 0);
 
             // A row is "full-width" if it starts in the left column area
             // and ends in the right column area, spanning the midpoint.
             const COLUMN_MARGIN = 50; // tolerance for column detection
             const isFullWidth = minX < (pageMiddleX - COLUMN_MARGIN) &&
-                                maxX > (pageMiddleX + COLUMN_MARGIN);
+                maxX > (pageMiddleX + COLUMN_MARGIN);
 
             if (isFullWidth) {
                 // Full-width text (titles, headers, abstracts, tables)
@@ -247,10 +249,116 @@ async function loadPdfText(filePath) {
     const fullText = allPageTexts.join("\n\n");
 
     // Clean up common PDF extraction artifacts
-    return fullText
+    const rawCleaned = fullText
         .replace(/\r\n/g, "\n")         // normalize line endings
         .replace(/[ \t]+\n/g, "\n")     // trim trailing whitespace on lines
         .replace(/\n{3,}/g, "\n\n")     // collapse excessive blank lines
+        .trim();
+
+    // -----------------------------------------------------------------------
+    // Deep post-processing: remove noise that poisons embeddings.
+    // Academic papers extracted via pdfjs often contain:
+    //   - Math equations with raw symbols (∑, ∏, ≈, η, θ, ≤, ·|·)
+    //   - Orphan tokens from two-column layout reconstruction (single chars,
+    //     numbers, or footnote markers on their own lines)
+    //   - Table rows (pure numbers / percentages on a line)
+    //   - Figure captions that are half-extracted ("Figure 2:", "Doc 1")
+    //   - Citation-only lines ("[1]", "[23]")
+    //   - Section-number-only lines ("3", "4.1", "11")
+    //   - Reference section entries that add no semantic value
+    //   - URL fragments
+    // -----------------------------------------------------------------------
+    return cleanExtractedText(rawCleaned);
+}
+
+// ============================================================================
+// PDF Text Post-Processor: Strip noise that corrupts embeddings
+// ============================================================================
+// pdfjs geometric reconstruction still leaves behind several classes of
+// garbage lines in two-column academic papers. Each category below has been
+// identified directly from the parsed.txt output of this specific document.
+// Removing them before chunking dramatically improves embedding quality.
+// ============================================================================
+
+/**
+ * Remove lines that carry no semantic value and would dilute or corrupt
+ * embeddings if left in the chunked text.
+ *
+ * Categories removed:
+ *  1. Lines that are only numbers, punctuation, arrows, symbols (table cells,
+ *     equation fragments, page numbers, section numbers, lone footnote markers)
+ *  2. Lines containing only citation refs like "[1]", "[23, 24]"
+ *  3. Lines that look like raw URL fragments (http, arxiv:, doi:)
+ *  4. Lines shorter than 20 characters that aren't a clean sentence start
+ *     (these are almost always orphan PDF extraction artifacts)
+ *  5. Runs of math/Greek symbols that carry no prose meaning
+ *  6. Lines that are clearly table headers / table data (all-caps abbreviations
+ *     plus numbers)
+ *
+ * @param {string} text - Raw extracted and line-end-normalized text.
+ * @returns {string} - Clean prose text, ready for chunking.
+ */
+function cleanExtractedText(text) {
+    const lines = text.split("\n");
+    const cleaned = [];
+
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+
+        // Keep blank lines (paragraph separators)
+        if (!line) {
+            cleaned.push("");
+            continue;
+        }
+
+        // --- Drop: line is only digits, punctuation, math symbols, Greek letters ---
+        // Catches: "3", "4.1", "11", "∑", "∏", "·|·", "≤", "1\n2\n3"
+        if (/^[\d\s\.,;:!?\-–—\+\=\*\/\(\)\[\]\{\}†‡∑∏≈≤≥×÷→←↑↓∈∉⊆⊇∀∃∂∇αβγδεζηθλμνξπρσστυφχψω]+$/.test(line)) {
+            continue;
+        }
+
+        // --- Drop: citation-only lines like "[1]", "[3, 4]", "[26, 48]" ---
+        if (/^\[\d[\d,\s]*\]$/.test(line)) {
+            continue;
+        }
+
+        // --- Drop: URL fragments (these appear when reference URLs wrap across lines) ---
+        if (/^(https?:\/\/|arxiv:|doi:|https:|http:|\/{2})/.test(line)) {
+            continue;
+        }
+
+        // --- Drop: lines that are clearly just section number prefixes like "2.4", "4.2.1" ---
+        if (/^\d{1,2}(\.\d{1,2}){0,2}$/.test(line)) {
+            continue;
+        }
+
+        // --- Drop: short lines that are almost certainly orphan layout artifacts ---
+        // We keep short lines only if they start with a capital letter and look
+        // like a proper heading (e.g. "Abstract", "Introduction").
+        // The threshold is 20 chars. Lines shorter than that with no capital start
+        // are table cells, formula parts, or stray footnote markers.
+        if (line.length < 20 && !/^[A-Z]/.test(line)) {
+            continue;
+        }
+
+        // --- Drop: lines that are only variable names / subscript notation ---
+        // e.g. "p η", "BERT q ( x )", "z ∈ top-", "θ i 1: i − 1"
+        if (/^[a-zA-Zα-ωΑ-Ω\s\d\(\)\[\]\{\}:,\-∈θηφλ]+$/.test(line) && line.length < 40 && /[α-ωΑ-Ω]/.test(line)) {
+            continue;
+        }
+
+        // --- Drop: lines that look like raw table data (only numbers and % and spaces) ---
+        if (/^[\d\.\s%\-–]+$/.test(line) && line.length < 60) {
+            continue;
+        }
+
+        cleaned.push(line);
+    }
+
+    // Collapse multiple consecutive blank lines that may result from drops
+    return cleaned
+        .join("\n")
+        .replace(/\n{3,}/g, "\n\n")
         .trim();
 }
 
@@ -268,16 +376,43 @@ async function loadPdfText(filePath) {
  * at safe linguistic boundaries. Tries paragraph breaks first (\n\n), then
  * line breaks (\n), then sentence endings (. ), then word boundaries ( ).
  *
+ * [ADVANCED RAG — Objective 1] Accepts an `overlapSize` parameter (default 150).
+ * After each chunk is finalized, the last `overlapSize` characters are extracted,
+ * trimmed back to a clean word boundary, and prepended to the next chunk.
+ * This ensures semantic continuity across chunk boundaries.
+ *
  * @param {string} text - The text to split.
  * @param {number} maxSize - Maximum characters per chunk.
- * @returns {string[]} - Array of text chunks.
+ * @param {number} [overlapSize=80] - Characters of overlap to carry into the next chunk.
+ *   Kept deliberately short (80 chars) to bridge boundary context without
+ *   re-feeding large repeated blocks into the embedding model.
+ * @returns {string[]} - Array of text chunks with leading overlap.
  */
-function safeSplitText(text, maxSize) {
+function safeSplitText(text, maxSize, overlapSize = 80) {
     const cleanText = text.trim();
 
     // Base case: text already fits in one chunk
     if (!cleanText || cleanText.length <= maxSize) {
         return cleanText ? [cleanText] : [];
+    }
+
+    // [ADVANCED RAG — Objective 1]
+    // Helper: given a completed chunk string, extract the last `overlapSize`
+    // characters and walk backwards to the nearest word boundary so we never
+    // split mid-word. Returns an empty string when overlap is disabled (0).
+    function extractOverlapTail(chunk) {
+        if (!overlapSize || overlapSize <= 0 || chunk.length <= overlapSize) {
+            return "";
+        }
+        // Grab the raw tail
+        let tail = chunk.slice(-overlapSize);
+        // Walk forward until we hit a space or start of the tail — this trims
+        // any leading partial word that was cut mid-character by the slice.
+        const firstSpace = tail.indexOf(" ");
+        if (firstSpace > 0 && firstSpace < tail.length - 1) {
+            tail = tail.slice(firstSpace + 1);
+        }
+        return tail.trim();
     }
 
     // Try each separator in order of preference (most meaningful boundary first)
@@ -309,17 +444,31 @@ function safeSplitText(text, maxSize) {
             } else {
                 // Part doesn't fit — flush current chunk and start fresh
                 if (current) {
-                    chunks.push(current.trim());
+                    const flushed = current.trim();
+                    chunks.push(flushed);
+
+                    // [ADVANCED RAG — Objective 1] Carry the overlap tail
+                    // from the just-flushed chunk into the next accumulator
+                    // so the next chunk begins with shared context.
+                    const overlapTail = extractOverlapTail(flushed);
+                    current = overlapTail ? overlapTail : "";
                 }
 
                 if (trimmedPart.length > maxSize) {
                     // This single part is still too large — recurse with the
-                    // next finer-grained separator
-                    const subChunks = safeSplitText(trimmedPart, maxSize);
+                    // next finer-grained separator, propagating overlapSize.
+                    const subChunks = safeSplitText(trimmedPart, maxSize, overlapSize);
                     chunks.push(...subChunks);
-                    current = "";
+                    // [ADVANCED RAG — Objective 1] Seed next accumulator from
+                    // the tail of the last sub-chunk produced by the recursion.
+                    const lastSub = subChunks[subChunks.length - 1] || "";
+                    current = extractOverlapTail(lastSub);
                 } else {
-                    current = trimmedPart;
+                    // [ADVANCED RAG — Objective 1] Append the new part after
+                    // the overlap tail already seeded into `current`.
+                    current = current
+                        ? `${current} ${trimmedPart}`
+                        : trimmedPart;
                 }
             }
         }
