@@ -299,6 +299,26 @@ async function loadPdfText(filePath) {
  * @returns {string} - Clean prose text, ready for chunking.
  */
 function cleanExtractedText(text) {
+    // -----------------------------------------------------------------------
+    // Bibliography Trap Fix: Discard the entire references/bibliography section.
+    // Academic papers end with a "References", "Bibliography", or "Works Cited"
+    // section whose entries are dense with author names, paper titles, and
+    // venue keywords. These create high keyword overlap with the body text,
+    // causing the retriever to rank citation chunks above actual factual chunks.
+    //
+    // The regex looks for one of these headers appearing at the start of a line
+    // (possibly preceded by a section number like "7." or "8.1"), optionally
+    // followed by a newline. Everything from that header onward is truncated.
+    // Flags: case-insensitive (i), multiline (m) so ^ matches each line start.
+    // -----------------------------------------------------------------------
+    const bibPattern = /^(?:\d{1,2}\.?\s*)?(?:references|bibliography|works\s+cited)\s*$/im;
+    const bibMatch = text.match(bibPattern);
+    if (bibMatch) {
+        // Truncate at the start of the bibliography header
+        text = text.slice(0, bibMatch.index).trim();
+        console.log(`[Bibliography Filter] Truncated text at "${bibMatch[0].trim()}" header (removed ${text.length} → end)`);
+    }
+
     const lines = text.split("\n");
     const cleaned = [];
 

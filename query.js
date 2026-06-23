@@ -19,7 +19,7 @@ const OLLAMA_URL = "http://127.0.0.1:11434";
 const CHROMA_URL = "http://localhost:8000";
 const EMBEDDING_MODEL = "nomic-embed-text";
 const CHAT_MODEL = "llama3.1:8b";
-const RETRIEVAL_COUNT = 12;          // Fetch extra candidates so rank+slice has strong pool to work from
+const RETRIEVAL_COUNT = 20;          // Expanded: wider initial net feeds the hybrid re-ranker more candidates
 const TOP_N_CHUNKS = 5;              // Keep top 5 highest-similarity chunks — enough for a dense RAG paper
 const OLLAMA_CONTEXT_WINDOW = 8192;
 
@@ -379,19 +379,21 @@ function buildContext(chunks) {
  */
 function buildPrompt(question, chunks) {
     return `[INST] <<SYS>>
-You are a precise, document-bound Q&A assistant. The ONLY document you have access to is the academic paper:
+You are a thorough, document-bound Q&A assistant. The ONLY document you have access to is the academic paper:
 "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" (Lewis et al., 2021).
 
 The CONTEXT below contains exact excerpts from that paper. Your entire answer MUST come from these excerpts.
 
-ABSOLUTE RULES — breaking any rule makes your answer invalid:
+RULES:
 1. NEVER use knowledge from your training data. ONLY answer using the CONTEXT excerpts below.
 2. If the question cannot be answered from the CONTEXT, output this exact sentence and nothing else:
    "${SAFE_UNKNOWN_ANSWER}"
 3. Do NOT invent names, numbers, model names, results, or claims not explicitly written in the CONTEXT.
-4. Quote or closely paraphrase only what is written in the CONTEXT. Do not elaborate.
-5. After your answer, write: "[Source: <number(s)>]" citing which context blocks you used.
-6. Use bullet points for lists. Be concise.
+4. Provide a DETAILED and COMPREHENSIVE answer. Cover every relevant aspect you can find in the CONTEXT.
+5. Write in flowing paragraphs. Use bullet points only when listing distinct items.
+6. After EACH claim or piece of information, cite the source inline like this: (Source 1) or (Source 2, Source 3).
+   Do NOT put all citations at the end — cite inline after every statement.
+7. Synthesize information from multiple context blocks when they discuss the same topic.
 <</SYS>>
 
 === CONTEXT EXCERPTS FROM THE PAPER ===
@@ -400,7 +402,7 @@ ${buildContext(chunks)}
 
 Question: ${question}
 
-Answer based solely on the context above: [/INST]`;
+Provide a detailed answer based solely on the context above: [/INST]`;
 }
 
 /**
@@ -447,17 +449,60 @@ async function prepareAnswer(question, options = {}) {
     // right here before it can pollute ranking, parent expansion, or the LLM prompt.
     const filteredHits = applySimilarityGate(rawHits);
 
-    // Step 3: [ADVANCED RAG — Objective 3] Rank filtered hits by cosine similarity
-    // (highest first) and slice to the top N. This prevents lower-quality chunks
-    // from consuming LLM context window space.
+    // Step 3: [ADVANCED RAG — Objective 3] Hybrid Re-Ranking
+    // Pure cosine similarity can be fooled by bibliography entries that share
+    // academic vocabulary with the query. We blend cosine similarity with a
+    // lightweight native JS keyword density score to promote chunks that are
+    // both semantically AND lexically relevant to the user's question.
+    //
+    // Scoring formula:
+    //   hybridScore = (cosineSimilarity × 0.7) + (keywordMatchRatio × 0.3)
+    //
+    // - cosineSimilarity ∈ [0, 1]: from ChromaDB's cosine distance
+    // - keywordMatchRatio ∈ [0, 1]: fraction of query tokens found in the chunk
+    // - Weights: 70% semantic (embedding), 30% lexical (keyword overlap)
+    //   This keeps embeddings dominant while giving a meaningful boost to chunks
+    //   that contain the user's actual terms.
+    // -----------------------------------------------------------------------
+
+    // Tokenize the question: lowercase, strip punctuation, keep words > 3 chars
+    // to filter out stopwords and noise ("what", "is", "the", "a", etc.)
+    const queryTokens = question
+        .toLowerCase()
+        .replace(/[^\w\s]/g, "")       // strip all punctuation
+        .split(/\s+/)                   // split on whitespace
+        .filter(token => token.length > 3);  // discard short/stop-ish words
+
     const rankedHits = [...filteredHits]
-        .sort((a, b) => b.similarity - a.similarity)   // highest similarity first
-        .slice(0, TOP_N_CHUNKS);                        // keep only top N
+        .map(hit => {
+            const chunkLower = hit.text.toLowerCase();
+
+            // Count how many unique query tokens appear anywhere in this chunk
+            const matchCount = queryTokens.filter(token => chunkLower.includes(token)).length;
+
+            // matchRatio: fraction of query tokens found (0 = none, 1 = all)
+            const matchRatio = queryTokens.length > 0
+                ? matchCount / queryTokens.length
+                : 0;
+
+            // Blend: 70% cosine similarity + 30% keyword match ratio
+            const hybridScore = (hit.similarity * 0.7) + (matchRatio * 0.3);
+
+            return { ...hit, matchRatio, hybridScore };
+        })
+        .sort((a, b) => b.hybridScore - a.hybridScore)  // highest hybrid score first
+        .slice(0, TOP_N_CHUNKS);                         // keep only top N
 
     console.log(
-        `[Rank & Slice] ${filteredHits.length} filtered hits → top ${rankedHits.length} ` +
-        `(threshold=${SIMILARITY_THRESHOLD}, topN=${TOP_N_CHUNKS})`
+        `[Hybrid Re-Rank] ${filteredHits.length} filtered hits → top ${rankedHits.length} ` +
+        `(threshold=${SIMILARITY_THRESHOLD}, topN=${TOP_N_CHUNKS}, queryTokens=${queryTokens.length})`
     );
+    rankedHits.forEach((h, i) => {
+        console.log(
+            `  ${i + 1}. sim=${h.similarity.toFixed(4)} keyword=${h.matchRatio.toFixed(2)} ` +
+            `hybrid=${h.hybridScore.toFixed(4)} preview="${h.text.replace(/\s+/g, " ").slice(0, 80)}"`
+        );
+    });
 
     // Step 4: Expand to parent context (hierarchical) or dedupe (standard)
     const contextChunks = buildContextChunks(rankedHits, chunkingMethod);
@@ -519,8 +564,8 @@ async function streamOllamaAnswer(prompt, handlers = {}) {
                 stream: true,
                 options: {
                     temperature: 0.0,    // Fully deterministic — no sampling randomness
-                    top_p: 0.1,          // Only consider top 10% probability mass per token
-                    repeat_penalty: 1.15, // Penalise repetition / looping on thin context
+                    top_p: 0.9,          // Wider token pool allows longer, more natural prose
+                    repeat_penalty: 1.1,  // Lighter penalty — avoids cutting off detailed answers
                     num_ctx: OLLAMA_CONTEXT_WINDOW
                 }
             },
