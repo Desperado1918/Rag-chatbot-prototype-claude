@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="./style.css">
 </head>
@@ -20,8 +20,7 @@
         <!-- Header -->
         <header class="header">
             <div class="header-brand">
-                <div class="brand-icon" aria-hidden="true">R</div>
-                <span class="brand-name">Research Assistant</span>
+                <span class="brand-name">Research Paper Assistant</span>
             </div>
             <div class="header-actions">
                 <div class="status-indicator" id="statusIndicator">
@@ -40,51 +39,7 @@
             <div class="messages" id="messages">
                 <!-- Welcome section — shown when no messages -->
                 <div class="welcome-section" id="welcomeSection">
-                    <div class="welcome-icon" aria-hidden="true">R</div>
                     <h1 class="welcome-title">Research Paper Assistant</h1>
-                    <p class="welcome-subtitle">
-                        Upload research papers, textbooks, or any PDF document.
-                        Get precise answers grounded strictly in the content — zero hallucination.
-                    </p>
-
-                    <!-- Drag & Drop Upload Zone -->
-                    <div class="upload-zone" id="uploadZone" role="button" tabindex="0"
-                        aria-label="Upload a PDF document">
-                        <div class="upload-zone-icon">
-                            <svg viewBox="0 0 24 24">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                <polyline points="17 8 12 3 7 8"></polyline>
-                                <line x1="12" y1="3" x2="12" y2="15"></line>
-                            </svg>
-                        </div>
-                        <div class="upload-zone-text">
-                            <strong>Drop your PDF here</strong> or click to browse
-                        </div>
-                        <div class="upload-zone-hint">PDF files up to 100MB — research papers, textbooks, notes</div>
-                        <input type="file" id="fileInput" accept=".pdf,application/pdf">
-                        <div class="upload-progress" id="uploadProgress">
-                            <div class="upload-progress-bar">
-                                <div class="upload-progress-fill" id="uploadProgressFill"></div>
-                            </div>
-                            <div class="upload-progress-text" id="uploadProgressText">Uploading...</div>
-                        </div>
-                    </div>
-
-                    <!-- Quick question chips -->
-                    <div class="welcome-chips" id="welcomeChips">
-                        <button class="welcome-chip" data-query="What is the main contribution of this paper?">
-                            <span>Main contribution</span>
-                        </button>
-                        <button class="welcome-chip" data-query="What methodology does this paper use?">
-                            <span>Methodology</span>
-                        </button>
-                        <button class="welcome-chip" data-query="What are the key findings and results?">
-                            <span>Key findings</span>
-                        </button>
-                        <button class="welcome-chip" data-query="Summarize this document in detail.">
-                            <span>Full summary</span>
-                        </button>
-                    </div>
                 </div>
             </div>
         </div>
@@ -95,8 +50,33 @@
                 <div class="ingest-spinner"></div>
                 <span id="ingestProgressText">Uploading document...</span>
             </div>
+
+            <!-- Floating Pop-up Bubble -->
+            <div class="upload-popover" id="uploadPopover" aria-hidden="true">
+                <div class="upload-zone" id="uploadZone" role="button" tabindex="0"
+                    aria-label="Upload a PDF document">
+                    <div class="upload-zone-text">
+                        Drop your PDF here or <span class="browse-link">click to browse</span>
+                    </div>
+                    <input type="file" id="fileInput" accept=".pdf,application/pdf">
+                    <div class="upload-progress" id="uploadProgress">
+                        <div class="upload-progress-bar">
+                            <div class="upload-progress-fill" id="uploadProgressFill"></div>
+                        </div>
+                        <div class="upload-progress-text" id="uploadProgressText">Uploading...</div>
+                    </div>
+                </div>
+            </div>
+
             <form class="composer" id="chatForm" aria-label="Ask a question">
                 <div class="composer-inner">
+                    <button type="button" class="attach-btn" id="attachButton" aria-label="Attach document">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                    </button>
                     <input class="composer-input" id="messageInput" type="text" autocomplete="off"
                         placeholder="Ask about your document…" required aria-label="Your question">
                     <button type="submit" class="send-btn" id="sendButton" aria-label="Send message">
@@ -111,6 +91,22 @@
                     Answers come only from the uploaded document. Powered by <span>PageIndex</span> + <span>Qwen 2.5</span>
                 </div>
             </form>
+
+            <!-- Quick question chips -->
+            <div class="welcome-chips" id="welcomeChips">
+                <button class="welcome-chip" data-query="What is the main contribution of this paper?">
+                    <span>Main contribution</span>
+                </button>
+                <button class="welcome-chip" data-query="What methodology does this paper use?">
+                    <span>Methodology</span>
+                </button>
+                <button class="welcome-chip" data-query="What are the key findings and results?">
+                    <span>Key findings</span>
+                </button>
+                <button class="welcome-chip" data-query="Summarize this document in detail.">
+                    <span>Full summary</span>
+                </button>
+            </div>
         </div>
     </main>
 

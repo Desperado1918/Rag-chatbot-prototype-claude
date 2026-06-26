@@ -28,7 +28,9 @@ const uploadZone         = document.getElementById("uploadZone");
 const fileInput          = document.getElementById("fileInput");
 const uploadProgress     = document.getElementById("uploadProgress");
 const uploadProgressFill = document.getElementById("uploadProgressFill");
-const uploadProgressText = document.getElementById("uploadProgressText");
+const appEl              = document.querySelector(".app");
+const attachButton       = document.getElementById("attachButton");
+const uploadPopover      = document.getElementById("uploadPopover");
 
 const API_BASE = window.location.origin;
 
@@ -145,6 +147,7 @@ function renderMarkdown(text) {
 function hideWelcome() {
     if (welcomeSection && !hasMessages) {
         welcomeSection.style.display = "none";
+        if (appEl) appEl.classList.add("has-messages");
         hasMessages = true;
     }
 }
@@ -379,6 +382,16 @@ function setFormBusy(busy) {
     ingestButton.disabled = busy;
 }
 
+// Toggle send button visual state based on input value
+function updateSendButtonState() {
+    if (messageInput.value.trim().length > 0) {
+        sendButton.classList.add("active-btn");
+    } else {
+        sendButton.classList.remove("active-btn");
+    }
+}
+messageInput.addEventListener("input", updateSendButtonState);
+
 // ---------------------------------------------------------------------------
 // Chat Submit
 // ---------------------------------------------------------------------------
@@ -390,6 +403,7 @@ chatForm.addEventListener("submit", async (event) => {
 
     addUserMessage(question);
     messageInput.value = "";
+    updateSendButtonState();
 
     const typingRow = addBotTypingRow();
     setFormBusy(true);
@@ -416,6 +430,7 @@ welcomeChips.addEventListener("click", (event) => {
     const query = chip.dataset.query;
     if (query) {
         messageInput.value = query;
+        updateSendButtonState();
         chatForm.dispatchEvent(new Event("submit"));
     }
 });
@@ -522,6 +537,10 @@ async function uploadFile(file) {
         setTimeout(() => {
             uploadProgress.classList.remove("active");
             uploadProgressFill.style.width = "0%";
+            if (uploadPopover) {
+                uploadPopover.classList.remove("active");
+                uploadPopover.setAttribute("aria-hidden", "true");
+            }
 
             hideWelcome();
             const { textEl } = createMessage("bot");
@@ -533,6 +552,10 @@ async function uploadFile(file) {
     } catch (err) {
         uploadProgress.classList.remove("active");
         uploadProgressFill.style.width = "0%";
+        if (uploadPopover) {
+            uploadPopover.classList.remove("active");
+            uploadPopover.setAttribute("aria-hidden", "true");
+        }
         showUploadError(err.message);
         setStatus("Upload failed", "idle");
     } finally {
@@ -587,6 +610,42 @@ ingestButton.addEventListener("click", async () => {
         ingestProgress.classList.remove("active");
     }
 });
+
+// ---------------------------------------------------------------------------
+// Attachment Popover Toggle & Close Logic
+// ---------------------------------------------------------------------------
+if (attachButton && uploadPopover) {
+    attachButton.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isActive = uploadPopover.classList.contains("active");
+        if (isActive) {
+            uploadPopover.classList.remove("active");
+            uploadPopover.setAttribute("aria-hidden", "true");
+        } else {
+            uploadPopover.classList.add("active");
+            uploadPopover.setAttribute("aria-hidden", "false");
+        }
+    });
+
+    // Close popover when clicking outside of it or attachButton
+    document.addEventListener("click", (e) => {
+        if (uploadPopover.classList.contains("active") && 
+            !uploadPopover.contains(e.target) && 
+            e.target !== attachButton && 
+            !attachButton.contains(e.target)) {
+            uploadPopover.classList.remove("active");
+            uploadPopover.setAttribute("aria-hidden", "true");
+        }
+    });
+
+    // Close popover when Esc key is pressed
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && uploadPopover.classList.contains("active")) {
+            uploadPopover.classList.remove("active");
+            uploadPopover.setAttribute("aria-hidden", "true");
+        }
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Init
