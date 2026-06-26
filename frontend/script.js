@@ -1,164 +1,255 @@
 // ============================================================================
-// script.js — RAG Chatbot Frontend
+// script.js — RAG Chatbot Frontend (PageIndex + Qwen 2.5)
+// ============================================================================
+// Premium chat interface with:
+//   - Drag & drop PDF upload
+//   - Markdown rendering in bot responses
+//   - SSE streaming with token-by-token display
+//   - Welcome chips for quick questions
+//   - Upload progress indication
 // ============================================================================
 
 // ---------------------------------------------------------------------------
-// DOM references
+// DOM References
 // ---------------------------------------------------------------------------
-const chatForm          = document.getElementById("chatForm");
-const messageInput      = document.getElementById("messageInput");
-const sendButton        = document.getElementById("sendButton");
-const messages          = document.getElementById("messages");
-const statusText        = document.getElementById("status");
-const statusDot         = document.getElementById("statusDot");
-const chunkingMethodSelect = document.getElementById("chunkingMethod");
-const ingestButton      = document.getElementById("ingestButton");
-const sidebarToggle     = document.getElementById("sidebarToggle");
-const sidebar           = document.getElementById("sidebar");
+const chatForm           = document.getElementById("chatForm");
+const messageInput       = document.getElementById("messageInput");
+const sendButton         = document.getElementById("sendButton");
+const messagesContainer  = document.getElementById("messagesContainer");
+const messagesEl         = document.getElementById("messages");
+const statusDot          = document.getElementById("statusDot");
+const statusText         = document.getElementById("statusText");
+const ingestButton       = document.getElementById("ingestButton");
+const ingestProgress     = document.getElementById("ingestProgress");
+const ingestProgressText = document.getElementById("ingestProgressText");
+const welcomeSection     = document.getElementById("welcomeSection");
+const welcomeChips       = document.getElementById("welcomeChips");
+const uploadZone         = document.getElementById("uploadZone");
+const fileInput          = document.getElementById("fileInput");
+const uploadProgress     = document.getElementById("uploadProgress");
+const uploadProgressFill = document.getElementById("uploadProgressFill");
+const uploadProgressText = document.getElementById("uploadProgressText");
+
+const API_BASE = window.location.origin;
 
 // ---------------------------------------------------------------------------
-// Sidebar toggle
+// State
 // ---------------------------------------------------------------------------
-sidebarToggle.addEventListener("click", () => {
-    const isCollapsed = sidebar.classList.toggle("collapsed");
-    sidebarToggle.setAttribute("aria-expanded", String(!isCollapsed));
-});
+let hasMessages = false;
 
 // ---------------------------------------------------------------------------
-// Status helpers
+// Status Helpers
 // ---------------------------------------------------------------------------
 function setStatus(label, mode = "idle") {
     statusText.textContent = label;
-    statusDot.className    = "status-dot" + (mode !== "idle" ? ` ${mode}` : "");
+    statusDot.className = "status-dot";
+
+    if (mode === "ready") statusDot.classList.add("ready");
+    if (mode === "busy")  statusDot.classList.add("busy");
 }
 
 // ---------------------------------------------------------------------------
-// Message builders
+// Check Document Status on Load
+// ---------------------------------------------------------------------------
+async function checkDocumentStatus() {
+    try {
+        const res = await fetch(`${API_BASE}/status`);
+        const data = await res.json();
+
+        if (data.ready) {
+            setStatus(`${data.source || "Document"} loaded`, "ready");
+        } else {
+            setStatus("No document loaded", "idle");
+        }
+    } catch {
+        setStatus("Server offline", "idle");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Markdown Renderer (lightweight, no dependencies)
 // ---------------------------------------------------------------------------
 
 /**
- * Create a full message row (avatar + body) and append it to the feed.
- * Returns { row, textEl } so callers can mutate the text later.
+ * Convert markdown text to HTML.
+ * Supports: bold, italic, inline code, code blocks, headings,
+ * unordered/ordered lists, blockquotes, paragraphs, line breaks.
  */
-function createMessageRow(type) {
-    const row = document.createElement("div");
-    row.className = `message ${type}`;
-    row.setAttribute("role", "article");
+function renderMarkdown(text) {
+    if (!text) return "";
 
-    // Avatar
-    const avatar = document.createElement("div");
-    avatar.className = `message-avatar ${type === "user" ? "user-avatar" : "bot-avatar"}`;
-    avatar.setAttribute("aria-hidden", "true");
-    avatar.textContent = type === "user" ? "You" : "AI";
+    let html = text;
 
-    // Body wrapper
-    const body = document.createElement("div");
-    body.className = "message-body";
+    // Escape HTML entities first (prevent XSS)
+    html = html
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
 
-    // Text bubble
+    // Code blocks (``` ... ```)
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+        return `<pre><code class="lang-${lang || 'text'}">${code.trim()}</code></pre>`;
+    });
+
+    // Inline code (`...`)
+    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+    // Headings (### > ## > #)
+    html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+    // Bold (**text** or __text__)
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+
+    // Italic (*text* or _text_)
+    html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+    html = html.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, '<em>$1</em>');
+
+    // Blockquotes (> text)
+    html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+    // Unordered lists (- item or * item)
+    html = html.replace(/^(?:[-*]) (.+)$/gm, '<li>$1</li>');
+    html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+    // Ordered lists (1. item)
+    html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+    // Wrap consecutive <li> that aren't already in <ul> into <ol>
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, (match) => {
+        if (match.includes('<ul>')) return match;
+        return `<ol>${match}</ol>`;
+    });
+
+    // Paragraphs — split by double newlines
+    const blocks = html.split(/\n{2,}/);
+    html = blocks.map(block => {
+        block = block.trim();
+        if (!block) return "";
+        // Don't wrap blocks that are already block-level elements
+        if (/^<(h[1-6]|pre|ul|ol|blockquote|li|div)/i.test(block)) {
+            return block;
+        }
+        // Replace single newlines with <br> within paragraphs
+        return `<p>${block.replace(/\n/g, '<br>')}</p>`;
+    }).join("\n");
+
+    return html;
+}
+
+// ---------------------------------------------------------------------------
+// Message Builders
+// ---------------------------------------------------------------------------
+
+function hideWelcome() {
+    if (welcomeSection && !hasMessages) {
+        welcomeSection.style.display = "none";
+        hasMessages = true;
+    }
+}
+
+/**
+ * Create a message row and append to the feed.
+ * Returns { el, textEl } for mutation.
+ */
+function createMessage(role) {
+    hideWelcome();
+
+    const el = document.createElement("div");
+    el.className = `message ${role}`;
+
+    // Header with role name
+    const header = document.createElement("div");
+    header.className = "message-header";
+
+    const roleName = document.createElement("span");
+    roleName.className = "message-role";
+    roleName.textContent = role === "user" ? "You" : "Research Assistant";
+
+    header.appendChild(roleName);
+
+    // Text content
     const textEl = document.createElement("div");
     textEl.className = "message-text";
 
-    body.appendChild(textEl);
-    row.appendChild(avatar);
-    row.appendChild(body);
-    messages.appendChild(row);
+    el.appendChild(header);
+    el.appendChild(textEl);
+    messagesEl.appendChild(el);
 
     scrollToBottom();
-    return { row, body, textEl };
+    return { el, textEl };
 }
 
-/**
- * Append a user message bubble instantly.
- */
 function addUserMessage(text) {
-    const { textEl } = createMessageRow("user");
+    const { textEl } = createMessage("user");
     textEl.textContent = text;
     scrollToBottom();
 }
 
 /**
- * Create a bot row that shows an animated typing indicator.
- * Returns handles to replace the indicator with real content.
+ * Create a bot message row with typing indicator.
+ * Returns a controller to promote to real content.
  */
 function addBotTypingRow() {
-    const row = document.createElement("div");
-    row.className = "message bot";
-    row.setAttribute("role", "article");
+    hideWelcome();
 
-    // Avatar
-    const avatar = document.createElement("div");
-    avatar.className = "message-avatar bot-avatar";
-    avatar.setAttribute("aria-hidden", "true");
-    avatar.textContent = "AI";
+    const el = document.createElement("div");
+    el.className = "message bot";
 
-    // Body
-    const body = document.createElement("div");
-    body.className = "message-body";
+    const header = document.createElement("div");
+    header.className = "message-header";
 
-    // Typing indicator
+    const roleName = document.createElement("span");
+    roleName.className = "message-role";
+    roleName.textContent = "Research Assistant";
+
+    header.appendChild(roleName);
+
     const indicator = document.createElement("div");
     indicator.className = "typing-indicator";
     for (let i = 0; i < 3; i++) {
         const dot = document.createElement("span");
         dot.className = "typing-dot";
-        dot.setAttribute("aria-hidden", "true");
         indicator.appendChild(dot);
     }
 
-    body.appendChild(indicator);
-    row.appendChild(avatar);
-    row.appendChild(body);
-    messages.appendChild(row);
+    el.appendChild(header);
+    el.appendChild(indicator);
+    messagesEl.appendChild(el);
     scrollToBottom();
 
-    // Returns a controller for this row
+    // Track raw markdown text for final rendering
+    let rawText = "";
+
     return {
-        /**
-         * Replace the typing indicator with a real text bubble.
-         * Returns the text element so the caller can stream tokens into it.
-         */
         promoteToText(initialText = "") {
             indicator.remove();
-
             const textEl = document.createElement("div");
             textEl.className = "message-text";
-            textEl.textContent = initialText;
-            body.appendChild(textEl);
+            rawText = initialText;
+            textEl.innerHTML = renderMarkdown(rawText);
+            el.appendChild(textEl);
             scrollToBottom();
-            return { body, textEl };
+            return { el, textEl, appendMarkdown: (token) => {
+                rawText += token;
+                textEl.innerHTML = renderMarkdown(rawText);
+                scrollToBottom();
+            }};
         },
-
-        /** Replace the indicator with an error bubble */
         promoteToError(errorText) {
-            row.className = "message bot error";
+            el.classList.add("error");
             indicator.remove();
             const textEl = document.createElement("div");
             textEl.className = "message-text";
             textEl.textContent = errorText;
-            body.appendChild(textEl);
+            el.appendChild(textEl);
             scrollToBottom();
         }
     };
 }
 
-/**
- * Stream tokens into an existing text element.
- */
-function appendToken(textEl, token) {
-    // Clear placeholder text on first real token
-    if (textEl.dataset.placeholder === "true") {
-        textEl.textContent = "";
-        delete textEl.dataset.placeholder;
-    }
-    textEl.textContent += token;
-    scrollToBottom();
-}
-
-/**
- * Append pretty source cards below the answer bubble.
- */
-function appendSources(body, sources) {
+function appendSources(el, sources) {
     if (!sources || sources.length === 0) return;
 
     const block = document.createElement("div");
@@ -173,38 +264,35 @@ function appendSources(body, sources) {
         const card = document.createElement("div");
         card.className = "source-card";
 
-        const loc = src.parentNumber
-            ? `parent ${src.parentNumber}`
-            : `chunk ${src.chunkNumber}`;
+        const loc = document.createElement("span");
+        loc.className = "source-loc";
+        loc.textContent = src.source || "Document";
+        card.appendChild(loc);
 
-        const locEl = document.createElement("span");
-        locEl.className = "source-loc";
-        locEl.textContent = `${src.source} · ${loc}`;
+        if (src.page) {
+            const page = document.createElement("span");
+            page.className = "source-page";
+            page.textContent = `p.${src.page}`;
+            card.appendChild(page);
+        }
 
-        const scoreEl = document.createElement("span");
-        scoreEl.className = "source-score";
-        scoreEl.textContent = `sim ${src.similarity}`;
-
-        card.appendChild(locEl);
-        card.appendChild(scoreEl);
         block.appendChild(card);
     });
 
-    body.appendChild(block);
+    el.appendChild(block);
     scrollToBottom();
 }
 
 function scrollToBottom() {
-    messages.scrollTop = messages.scrollHeight;
+    requestAnimationFrame(() => {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    });
 }
 
 // ---------------------------------------------------------------------------
-// SSE streaming
+// SSE Streaming
 // ---------------------------------------------------------------------------
 
-/**
- * Parse a single SSE block (event: / data: lines) into { event, data }.
- */
 function parseSseBlock(block) {
     const lines = block.split("\n");
     let event = "message";
@@ -218,15 +306,11 @@ function parseSseBlock(block) {
     return { event, data: dataLines.join("\n") };
 }
 
-/**
- * Open an SSE stream for the given question and pipe tokens into `textEl`.
- * Resolves with the sources array when the stream is done.
- */
-async function streamChat(question, chunkingMethod, typingRow) {
-    const response = await fetch("http://localhost:3000/chat/stream", {
+async function streamChat(question, typingRow) {
+    const response = await fetch(`${API_BASE}/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: question, chunkingMethod })
+        body: JSON.stringify({ message: question })
     });
 
     if (!response.ok || !response.body) {
@@ -237,8 +321,7 @@ async function streamChat(question, chunkingMethod, typingRow) {
     const decoder = new TextDecoder();
     let buffer    = "";
     let sources   = [];
-    let textEl    = null;   // initialised on first token
-    let body      = null;
+    let promoted  = null;
 
     while (true) {
         const { value, done } = await reader.read();
@@ -251,8 +334,8 @@ async function streamChat(question, chunkingMethod, typingRow) {
         for (const block of blocks) {
             if (!block.trim()) continue;
 
-            const parsed  = parseSseBlock(block);
-            let   payload;
+            const parsed = parseSseBlock(block);
+            let payload;
 
             try {
                 payload = JSON.parse(parsed.data);
@@ -265,11 +348,10 @@ async function streamChat(question, chunkingMethod, typingRow) {
             }
 
             if (parsed.event === "token") {
-                // Promote typing indicator → text bubble on first token
-                if (!textEl) {
-                    ({ body, textEl } = typingRow.promoteToText(""));
+                if (!promoted) {
+                    promoted = typingRow.promoteToText("");
                 }
-                appendToken(textEl, payload.token || "");
+                promoted.appendMarkdown(payload.token || "");
             }
 
             if (parsed.event === "error") {
@@ -277,35 +359,33 @@ async function streamChat(question, chunkingMethod, typingRow) {
             }
 
             if (parsed.event === "done") {
-                // If no tokens were emitted (empty context / refusal), promote now
-                if (!textEl) {
-                    ({ body, textEl } = typingRow.promoteToText("I don't know based on the provided documents."));
+                if (!promoted) {
+                    promoted = typingRow.promoteToText(
+                        "I don't know based on the provided documents."
+                    );
                 }
-                appendSources(body, sources);
+                if (promoted.el) appendSources(promoted.el, sources);
             }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Disable / enable form controls
+// Form Controls
 // ---------------------------------------------------------------------------
 function setFormBusy(busy) {
-    messageInput.disabled          = busy;
-    sendButton.disabled            = busy;
-    chunkingMethodSelect.disabled  = busy;
-    ingestButton.disabled          = busy;
+    messageInput.disabled = busy;
+    sendButton.disabled   = busy;
+    ingestButton.disabled = busy;
 }
 
 // ---------------------------------------------------------------------------
-// Chat submit
+// Chat Submit
 // ---------------------------------------------------------------------------
 chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const question      = messageInput.value.trim();
-    const chunkingMethod = chunkingMethodSelect.value;
-
+    const question = messageInput.value.trim();
     if (!question) return;
 
     addUserMessage(question);
@@ -313,33 +393,174 @@ chatForm.addEventListener("submit", async (event) => {
 
     const typingRow = addBotTypingRow();
     setFormBusy(true);
-    setStatus("Thinking…", "busy");
+    setStatus("Retrieving & generating…", "busy");
 
     try {
-        await streamChat(question, chunkingMethod, typingRow);
+        await streamChat(question, typingRow);
     } catch (err) {
         typingRow.promoteToError(err.message);
     } finally {
         setFormBusy(false);
-        setStatus("Ready", "idle");
+        setStatus("Ready", "ready");
         messageInput.focus();
     }
 });
 
 // ---------------------------------------------------------------------------
-// Ingest
+// Welcome Chips — Click to Auto-Ask
 // ---------------------------------------------------------------------------
-ingestButton.addEventListener("click", async () => {
-    const chunkingMethod = chunkingMethodSelect.value;
+welcomeChips.addEventListener("click", (event) => {
+    const chip = event.target.closest(".welcome-chip");
+    if (!chip) return;
 
+    const query = chip.dataset.query;
+    if (query) {
+        messageInput.value = query;
+        chatForm.dispatchEvent(new Event("submit"));
+    }
+});
+
+// ---------------------------------------------------------------------------
+// File Upload — Drag & Drop + Click
+// ---------------------------------------------------------------------------
+
+// Click to open file picker
+uploadZone.addEventListener("click", (e) => {
+    if (e.target === fileInput) return;
+    fileInput.click();
+});
+
+// Keyboard accessibility
+uploadZone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        fileInput.click();
+    }
+});
+
+// File selected via picker
+fileInput.addEventListener("change", () => {
+    if (fileInput.files.length > 0) {
+        uploadFile(fileInput.files[0]);
+    }
+});
+
+// Drag events
+uploadZone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadZone.classList.add("dragover");
+});
+
+uploadZone.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadZone.classList.remove("dragover");
+});
+
+uploadZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadZone.classList.remove("dragover");
+
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+        const file = files[0];
+        if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+            uploadFile(file);
+        } else {
+            showUploadError("Only PDF files are accepted.");
+        }
+    }
+});
+
+// Prevent page-level drops
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => e.preventDefault());
+
+/**
+ * Upload a PDF file to the server.
+ */
+async function uploadFile(file) {
+    const fileSizeMB = (file.size / (1024 * 1024)).toFixed(1);
+    console.log(`[Upload] ${file.name} (${fileSizeMB} MB)`);
+
+    // Show progress
+    uploadProgress.classList.add("active");
+    uploadProgressFill.style.width = "10%";
+    uploadProgressText.textContent = `Uploading ${file.name}...`;
     setFormBusy(true);
-    setStatus("Ingesting…", "busy");
+    setStatus("Uploading…", "busy");
 
     try {
-        const response = await fetch("http://localhost:3000/ingest", {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        // Simulate progress stages
+        uploadProgressFill.style.width = "30%";
+
+        const response = await fetch(`${API_BASE}/upload`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chunkingMethod })
+            body: formData
+        });
+
+        uploadProgressFill.style.width = "70%";
+        uploadProgressText.textContent = "Building document index...";
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Upload failed — check server logs.");
+        }
+
+        uploadProgressFill.style.width = "100%";
+        uploadProgressText.textContent = "Document ready!";
+
+        setStatus(`${data.source || file.name} loaded`, "ready");
+
+        // Show success message in chat
+        setTimeout(() => {
+            uploadProgress.classList.remove("active");
+            uploadProgressFill.style.width = "0%";
+
+            hideWelcome();
+            const { textEl } = createMessage("bot");
+            textEl.innerHTML = renderMarkdown(
+                `**✓ Document "${data.source}" has been indexed and is ready for questions.**\n\nYou can now ask anything about this document. I'll answer strictly based on its content.`
+            );
+        }, 800);
+
+    } catch (err) {
+        uploadProgress.classList.remove("active");
+        uploadProgressFill.style.width = "0%";
+        showUploadError(err.message);
+        setStatus("Upload failed", "idle");
+    } finally {
+        setFormBusy(false);
+        fileInput.value = "";
+    }
+}
+
+function showUploadError(message) {
+    hideWelcome();
+    const { el, textEl } = createMessage("bot");
+    el.classList.add("error");
+    textEl.textContent = `Upload error: ${message}`;
+}
+
+// ---------------------------------------------------------------------------
+// Ingest Default Document
+// ---------------------------------------------------------------------------
+ingestButton.addEventListener("click", async () => {
+    setFormBusy(true);
+    setStatus("Ingesting…", "busy");
+    ingestProgress.classList.add("active");
+    ingestProgressText.textContent = "Uploading document to PageIndex...";
+
+    try {
+        const response = await fetch(`${API_BASE}/ingest`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" }
         });
 
         const data = await response.json();
@@ -348,15 +569,27 @@ ingestButton.addEventListener("click", async () => {
             throw new Error(data.error || "Ingestion failed — check server logs.");
         }
 
-        // Show a success bot message
-        const { textEl } = createMessageRow("bot");
-        textEl.innerHTML = `✓ Ingested <strong>${data.recordsStored}</strong> records into <code>${data.collection}</code>.`;
+        setStatus(`${data.source || "Document"} loaded`, "ready");
+
+        // Show success message in chat
+        hideWelcome();
+        const { textEl } = createMessage("bot");
+        textEl.innerHTML = renderMarkdown(
+            `**✓ Document "${data.source}" has been indexed and is ready for questions.**\n\nYou can now ask anything about this document.`
+        );
     } catch (err) {
-        const { row, textEl } = createMessageRow("bot");
-        row.className = "message bot error";
+        const { el, textEl } = createMessage("bot");
+        el.classList.add("error");
         textEl.textContent = err.message;
+        setStatus("Ingest failed", "idle");
     } finally {
         setFormBusy(false);
-        setStatus("Ready", "idle");
+        ingestProgress.classList.remove("active");
     }
 });
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+checkDocumentStatus();
+messageInput.focus();

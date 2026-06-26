@@ -1,111 +1,120 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Local RAG Chatbot — Ask questions from your ingested research documents using a fully local AI pipeline.">
-    <title>RAG Chatbot — Local AI</title>
+    <meta name="description"
+        content="AI-powered research assistant — upload PDFs, textbooks, and research papers. Get precise, document-grounded answers powered by PageIndex and Qwen 2.5.">
+    <title>RAG Research Assistant — Document Q&A</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
     <link rel="stylesheet" href="./style.css">
 </head>
+
 <body>
-    <div class="bg-grid" aria-hidden="true"></div>
-
     <main class="app">
-        <!-- Sidebar -->
-        <aside class="sidebar" id="sidebar">
-            <div class="sidebar-brand">
-                <span class="brand-icon" aria-hidden="true">⬡</span>
-                <span class="brand-name">RAG<em>local</em></span>
+        <!-- Header -->
+        <header class="header">
+            <div class="header-brand">
+                <div class="brand-icon" aria-hidden="true">R</div>
+                <span class="brand-name">Research Assistant</span>
             </div>
-
-            <nav class="sidebar-nav">
-                <div class="nav-section-label">Pipeline</div>
-                <div class="control-group">
-                    <label class="control-label" for="chunkingMethod">Chunking Mode</label>
-                    <select id="chunkingMethod" class="select-input">
-                        <option value="hierarchical" selected>Hierarchical (Parent/Child)</option>
-                        <option value="standard">Standard (Flat)</option>
-                    </select>
+            <div class="header-actions">
+                <div class="status-indicator" id="statusIndicator">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">No document loaded</span>
                 </div>
-
-                <button type="button" id="ingestButton" class="btn btn-ingest">
+                <button type="button" id="ingestButton" class="btn" aria-label="Ingest default document">
                     <span class="btn-icon" aria-hidden="true">↑</span>
-                    Ingest Document
+                    <span>Ingest Default</span>
                 </button>
-
-                <div class="status-row">
-                    <span class="status-dot" id="statusDot" aria-hidden="true"></span>
-                    <span class="status-text" id="status">Ready</span>
-                </div>
-            </nav>
-
-            <div class="sidebar-info">
-                <div class="info-card">
-                    <div class="info-title">Model</div>
-                    <div class="info-value mono">llama3.1:8b</div>
-                </div>
-                <div class="info-card">
-                    <div class="info-title">Embeddings</div>
-                    <div class="info-value mono">nomic-embed-text</div>
-                </div>
-                <div class="info-card">
-                    <div class="info-title">Threshold</div>
-                    <div class="info-value mono">≥ 0.45 similarity</div>
-                </div>
             </div>
-        </aside>
+        </header>
 
-        <!-- Chat Panel -->
-        <section class="chat" aria-label="Chat interface">
-            <header class="chat-header">
-                <div class="header-left">
-                    <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar" aria-expanded="true">☰</button>
-                    <div>
-                        <h1 class="chat-title">RAG Research Assistant</h1>
-                        <p class="chat-subtitle">Grounded answers from your local document corpus</p>
-                    </div>
-                </div>
-                <div class="header-badge">
-                    <span class="pulse-dot" aria-hidden="true"></span>
-                    <span>Local &amp; Private</span>
-                </div>
-            </header>
+        <!-- Chat Area -->
+        <div class="messages-container" id="messagesContainer">
+            <div class="messages" id="messages">
+                <!-- Welcome section — shown when no messages -->
+                <div class="welcome-section" id="welcomeSection">
+                    <div class="welcome-icon" aria-hidden="true">R</div>
+                    <h1 class="welcome-title">Research Paper Assistant</h1>
+                    <p class="welcome-subtitle">
+                        Upload research papers, textbooks, or any PDF document.
+                        Get precise answers grounded strictly in the content — zero hallucination.
+                    </p>
 
-            <div class="messages" id="messages" role="log" aria-live="polite" aria-label="Conversation">
-                <div class="message bot welcome-message" role="article">
-                    <div class="message-avatar bot-avatar" aria-hidden="true">AI</div>
-                    <div class="message-body">
-                        <div class="message-text">
-                            Hello! I'm your RAG research assistant. I can answer questions based on your ingested documents — such as topics on <strong>retrieval strategies</strong>, <strong>chunking methods</strong>, <strong>embedding models</strong>, and <strong>benchmark evaluations</strong>.
-                            <br><br>
-                            To get started, click <strong>Ingest Document</strong> in the sidebar, then ask your question below.
+                    <!-- Drag & Drop Upload Zone -->
+                    <div class="upload-zone" id="uploadZone" role="button" tabindex="0"
+                        aria-label="Upload a PDF document">
+                        <div class="upload-zone-icon">
+                            <svg viewBox="0 0 24 24">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                        </div>
+                        <div class="upload-zone-text">
+                            <strong>Drop your PDF here</strong> or click to browse
+                        </div>
+                        <div class="upload-zone-hint">PDF files up to 100MB — research papers, textbooks, notes</div>
+                        <input type="file" id="fileInput" accept=".pdf,application/pdf">
+                        <div class="upload-progress" id="uploadProgress">
+                            <div class="upload-progress-bar">
+                                <div class="upload-progress-fill" id="uploadProgressFill"></div>
+                            </div>
+                            <div class="upload-progress-text" id="uploadProgressText">Uploading...</div>
                         </div>
                     </div>
+
+                    <!-- Quick question chips -->
+                    <div class="welcome-chips" id="welcomeChips">
+                        <button class="welcome-chip" data-query="What is the main contribution of this paper?">
+                            <span>Main contribution</span>
+                        </button>
+                        <button class="welcome-chip" data-query="What methodology does this paper use?">
+                            <span>Methodology</span>
+                        </button>
+                        <button class="welcome-chip" data-query="What are the key findings and results?">
+                            <span>Key findings</span>
+                        </button>
+                        <button class="welcome-chip" data-query="Summarize this document in detail.">
+                            <span>Full summary</span>
+                        </button>
+                    </div>
                 </div>
             </div>
+        </div>
 
+        <!-- Composer -->
+        <div class="composer-wrapper">
+            <div class="ingest-progress" id="ingestProgress">
+                <div class="ingest-spinner"></div>
+                <span id="ingestProgressText">Uploading document...</span>
+            </div>
             <form class="composer" id="chatForm" aria-label="Ask a question">
                 <div class="composer-inner">
-                    <input
-                        id="messageInput"
-                        type="text"
-                        autocomplete="off"
-                        placeholder="Ask a question about the RAG paper…"
-                        required
-                        aria-label="Your question"
-                    >
-                    <button type="submit" id="sendButton" aria-label="Send message">
-                        <span class="send-icon" aria-hidden="true">➤</span>
+                    <input class="composer-input" id="messageInput" type="text" autocomplete="off"
+                        placeholder="Ask about your document…" required aria-label="Your question">
+                    <button type="submit" class="send-btn" id="sendButton" aria-label="Send message">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M22 2L11 13"></path>
+                            <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+                        </svg>
                     </button>
                 </div>
-                <div class="composer-hint">Answers are grounded in document context only — no hallucination.</div>
+                <div class="composer-hint">
+                    Answers come only from the uploaded document. Powered by <span>PageIndex</span> + <span>Qwen 2.5</span>
+                </div>
             </form>
-        </section>
+        </div>
     </main>
 
     <script src="./script.js"></script>
 </body>
+
 </html>
