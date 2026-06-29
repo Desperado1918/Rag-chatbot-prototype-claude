@@ -88,13 +88,6 @@ async function retrieveFromPageIndex(question) {
         const stream = await client.api.chatCompletions({
             messages: [
                 {
-                    role: "system",
-                    content:
-                        "Extract and return ALL relevant sections, paragraphs, and data from the document that relate to the user's question. " +
-                        "Include exact text, page numbers, section headings, and any tables or figures. " +
-                        "Be thorough — include everything that could help answer the question."
-                },
-                {
                     role: "user",
                     content: question
                 }
