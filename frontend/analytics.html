@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics Dashboard — RAG Chatbot</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Base Styles (shared) + Analytics specific -->
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/analytics.css">
+</head>
+<body>
+    <div class="bg-grid"></div>
+
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-brand">
+                    <div class="brand-name">Research Assistant</div>
+                </div>
+            </div>
+            
+            <div class="sidebar-nav">
+                <a href="/" class="btn btn-ghost" style="justify-content: flex-start; text-decoration: none;">
+                    ← Back to Chat
+                </a>
+            </div>
+            
+            <div class="sidebar-footer">
+                <div class="sidebar-info" id="systemInfo">
+                    <div class="info-card">
+                        <span class="info-title">System Status</span>
+                        <span class="info-value"><div class="status-dot"></div> Online</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="analytics-main">
+            <header class="chat-header">
+                <div class="header-left">
+                    <div>
+                        <h1 class="chat-title">Analytics Dashboard</h1>
+                        <div class="chat-subtitle">System usage and performance metrics</div>
+                    </div>
+                </div>
+                <div class="header-right">
+                    <a href="/api/analytics/export" class="btn btn-ghost">Export JSONL</a>
+                </div>
+            </header>
+
+            <div class="dashboard-content">
+                <!-- Stat Cards -->
+                <div class="stat-grid" id="statGrid">
+                    <div class="stat-card skeleton"></div>
+                    <div class="stat-card skeleton"></div>
+                    <div class="stat-card skeleton"></div>
+                    <div class="stat-card skeleton"></div>
+                </div>
+
+                <!-- Charts -->
+                <div class="chart-grid">
+                    <div class="chart-card">
+                        <h3 class="chart-title">Daily Messages</h3>
+                        <div class="chart-container">
+                            <canvas id="usageChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/analytics.js"></script>
+</body>
+</html>

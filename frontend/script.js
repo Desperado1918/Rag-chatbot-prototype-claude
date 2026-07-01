@@ -1,163 +1,544 @@
 // ============================================================================
-// script.js — RAG Chatbot Frontend
+// script.js — RAG Chatbot Frontend (ChatGPT-style)
 // ============================================================================
+
+const API_BASE = window.location.origin;
 
 // ---------------------------------------------------------------------------
 // DOM references
 // ---------------------------------------------------------------------------
-const chatForm          = document.getElementById("chatForm");
-const messageInput      = document.getElementById("messageInput");
-const sendButton        = document.getElementById("sendButton");
-const messages          = document.getElementById("messages");
-const statusText        = document.getElementById("status");
-const statusDot         = document.getElementById("statusDot");
-const chunkingMethodSelect = document.getElementById("chunkingMethod");
-const ingestButton      = document.getElementById("ingestButton");
-const sidebarToggle     = document.getElementById("sidebarToggle");
-const sidebar           = document.getElementById("sidebar");
+const app                   = document.getElementById("app");
+const sidebar               = document.getElementById("sidebar");
+const sidebarToggle         = document.getElementById("sidebarToggle");
+const sidebarCloseBtn       = document.getElementById("sidebarCloseBtn");
+const newChatBtn            = document.getElementById("newChatBtn");
+const conversationSearch    = document.getElementById("conversationSearch");
+const conversationList      = document.getElementById("conversationList");
+const chatTitle             = document.getElementById("chatTitle");
+const chatSubtitle          = document.getElementById("chatSubtitle");
+const messagesEl            = document.getElementById("messages");
+const welcomeScreen         = document.getElementById("welcomeScreen");
+const chatForm              = document.getElementById("chatForm");
+const messageInput          = document.getElementById("messageInput");
+const sendButton            = document.getElementById("sendButton");
+const chunkingMethodSelect  = document.getElementById("chunkingMethod");
+const statusText            = document.getElementById("status");
+const statusDot             = document.getElementById("statusDot");
+const uploadBtn             = document.getElementById("uploadBtn");
+const fileInput             = document.getElementById("fileInput");
+const contextMenu           = document.getElementById("contextMenu");
+const renameOverlay         = document.getElementById("renameOverlay");
+const renameInput           = document.getElementById("renameInput");
+const renameSaveBtn         = document.getElementById("renameSaveBtn");
+const renameCancelBtn       = document.getElementById("renameCancelBtn");
+const headerChevronBtn       = document.getElementById("headerChevronBtn");
+const chatHeader            = document.querySelector(".chat-header");
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let currentConversationId = null;
+let conversations = [];
+let contextMenuTargetId = null;
+let isStreaming = false;
+
+// Pagination state
+let currentSearchQuery = "";
+let currentPage = 1;
+let hasMoreConversations = true;
+let isLoadingMore = false;
+
+// ---------------------------------------------------------------------------
+// API Helpers
+// ---------------------------------------------------------------------------
+async function api(path, options = {}) {
+    const res = await fetch(`${API_BASE}${path}`, {
+        headers: { "Content-Type": "application/json", ...options.headers },
+        ...options,
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+function setStatus(label, mode = "idle") {
+    statusText.textContent = label;
+    statusDot.className = "status-dot" + (mode !== "idle" ? ` ${mode}` : "");
+}
+
+// ---------------------------------------------------------------------------
+// Textarea auto-resize
+// ---------------------------------------------------------------------------
+messageInput.addEventListener("input", () => {
+    messageInput.style.height = "auto";
+    messageInput.style.height = Math.min(messageInput.scrollHeight, 150) + "px";
+});
 
 // ---------------------------------------------------------------------------
 // Sidebar toggle
 // ---------------------------------------------------------------------------
 sidebarToggle.addEventListener("click", () => {
-    const isCollapsed = sidebar.classList.toggle("collapsed");
-    sidebarToggle.setAttribute("aria-expanded", String(!isCollapsed));
+    sidebar.classList.toggle("collapsed");
+    app.classList.toggle("sidebar-collapsed");
+});
+
+sidebarCloseBtn.addEventListener("click", () => {
+    sidebar.classList.add("collapsed");
+    app.classList.add("sidebar-collapsed");
 });
 
 // ---------------------------------------------------------------------------
-// Status helpers
+// Conversation List — Fetch & Render
 // ---------------------------------------------------------------------------
-function setStatus(label, mode = "idle") {
-    statusText.textContent = label;
-    statusDot.className    = "status-dot" + (mode !== "idle" ? ` ${mode}` : "");
+function showSidebarSkeletons() {
+    conversationList.innerHTML = `
+        <div class="skeleton-item"></div>
+        <div class="skeleton-item"></div>
+        <div class="skeleton-item"></div>
+    `;
+}
+
+async function loadConversations(searchQuery = "", page = 1) {
+    if (isLoadingMore) return;
+    isLoadingMore = true;
+
+    try {
+        currentSearchQuery = searchQuery;
+        currentPage = page;
+        
+        if (page === 1) {
+            showSidebarSkeletons();
+        }
+
+        const params = new URLSearchParams();
+        if (searchQuery) params.append("search", searchQuery);
+        params.append("page", page);
+        params.append("limit", 20);
+
+        const data = await api(`/api/conversations?${params.toString()}`);
+        
+        if (page === 1) {
+            conversations = data.conversations || [];
+        } else {
+            conversations = [...conversations, ...(data.conversations || [])];
+        }
+
+        hasMoreConversations = data.pagination && data.pagination.page < data.pagination.totalPages;
+        
+        renderConversationList();
+    } catch (err) {
+        console.error("Failed to load conversations:", err);
+        if (page === 1) {
+            conversationList.innerHTML = `<div class="conv-empty">Failed to load conversations</div>`;
+        }
+    } finally {
+        isLoadingMore = false;
+    }
+}
+
+conversationList.addEventListener("scroll", () => {
+    if (hasMoreConversations && !isLoadingMore) {
+        // If scrolled near bottom
+        if (conversationList.scrollHeight - conversationList.scrollTop <= conversationList.clientHeight + 100) {
+            loadConversations(currentSearchQuery, currentPage + 1);
+        }
+    }
+});
+
+function renderConversationList() {
+    if (conversations.length === 0) {
+        conversationList.innerHTML = `<div class="conv-empty">No conversations yet</div>`;
+        return;
+    }
+
+    // Separate pinned, favorited and regular
+    const pinned = conversations.filter((c) => c.isPinned);
+    const favorites = conversations.filter((c) => c.isFavorited && !c.isPinned);
+    const regular = conversations.filter((c) => !c.isPinned && !c.isFavorited);
+
+    let html = "";
+
+    if (pinned.length > 0) {
+        html += `<div class="conv-section-label">Pinned</div>`;
+        html += pinned.map(renderConvItem).join("");
+    }
+
+    if (favorites.length > 0) {
+        html += `<div class="conv-section-label">Favorites</div>`;
+        html += favorites.map(renderConvItem).join("");
+    }
+
+    if (regular.length > 0) {
+        if (pinned.length > 0 || favorites.length > 0) {
+            html += `<div class="conv-section-label">Recent</div>`;
+        }
+        html += regular.map(renderConvItem).join("");
+    }
+
+    conversationList.innerHTML = html;
+
+    // Attach event listeners
+    conversationList.querySelectorAll(".conv-item").forEach((el) => {
+        el.addEventListener("click", () => {
+            openConversation(el.dataset.id);
+        });
+
+        el.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showContextMenu(e, el.dataset.id);
+        });
+    });
+}
+
+function renderConvItem(conv) {
+    const isActive = conv._id === currentConversationId;
+    const badges = [];
+    if (conv.isPinned) {
+        badges.push(`<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted); opacity: 0.8; margin-left: 4px;"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-.44-1.24l-2.78-3.47A2 2 0 0 1 15 9.3V5a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4.3a2 2 0 0 1-.78 1.23l-2.78 3.5A2 2 0 0 0 5 15.24V17z"></path></svg>`);
+    }
+
+    const preview = conv.lastMessagePreview
+        ? escapeHtml(conv.lastMessagePreview).slice(0, 60)
+        : "No messages yet";
+
+    return `
+        <button class="conv-item${isActive ? " active" : ""}" data-id="${conv._id}">
+            <div class="conv-item-content">
+                <div class="conv-item-title">${escapeHtml(conv.title)}</div>
+                <div class="conv-item-preview">${preview}</div>
+            </div>
+            <div class="conv-item-meta">
+                ${badges.map((b) => `<span class="conv-badge">${b}</span>`).join("")}
+            </div>
+        </button>
+    `;
 }
 
 // ---------------------------------------------------------------------------
-// Message builders
+// Conversation Search
 // ---------------------------------------------------------------------------
+let searchTimeout = null;
+conversationSearch.addEventListener("input", () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+        loadConversations(conversationSearch.value.trim());
+    }, 300);
+});
 
-/**
- * Create a full message row (avatar + body) and append it to the feed.
- * Returns { row, textEl } so callers can mutate the text later.
- */
-function createMessageRow(type) {
+// ---------------------------------------------------------------------------
+// Open Conversation
+// ---------------------------------------------------------------------------
+async function renderConversationDocuments(conversationId) {
+    const docsContainer = document.getElementById("headerDocs");
+    if (!docsContainer) return;
+    
+    docsContainer.innerHTML = "";
+    
+    try {
+        const data = await api(`/api/documents/conversations/${conversationId}`);
+        const docs = data.documents || [];
+        
+        if (docs.length > 0) {
+            docs.forEach(doc => {
+                const badge = document.createElement("span");
+                badge.className = `doc-badge ${doc.embeddingStatus}`;
+                const statusIcon = doc.embeddingStatus === "completed" ? "✓" : "⏳";
+                badge.innerHTML = `📄 ${escapeHtml(doc.originalName)} <small>${statusIcon}</small>`;
+                docsContainer.appendChild(badge);
+            });
+        }
+    } catch (err) {
+        console.error("Failed to load documents for header:", err);
+    }
+}
+
+async function openConversation(id) {
+    if (isStreaming) return;
+
+    currentConversationId = id;
+    setStatus("Loading…", "busy");
+
+    const chatContainer = document.querySelector(".chat");
+    if (chatContainer) {
+        chatContainer.classList.remove("welcome-active");
+    }
+
+    // Update URL query parameter
+    const url = new URL(window.location);
+    url.searchParams.set("chatId", id);
+    window.history.pushState(null, "", url.toString());
+
+    try {
+        const data = await api(`/api/conversations/${id}`);
+        const conv = data.conversation;
+        const messages = data.messages || [];
+
+        chatTitle.textContent = conv.title;
+        chatSubtitle.textContent = `${messages.length} messages`;
+
+        // Show header actions chevron
+        if (headerChevronBtn) {
+            headerChevronBtn.style.display = "inline-flex";
+        }
+
+        // Load and render associated documents in header
+        renderConversationDocuments(id);
+
+        // Hide welcome, show messages
+        welcomeScreen.classList.add("hidden");
+
+        // Clear existing messages (except welcome)
+        messagesEl.querySelectorAll(".message").forEach((el) => el.remove());
+
+        // Render all messages
+        for (const msg of messages) {
+            if (msg.role === "user") {
+                addUserMessage(msg.content, msg.createdAt, msg._id);
+            } else if (msg.role === "assistant") {
+                addBotMessage(msg.content, msg.sources, msg.createdAt, msg._id);
+            }
+        }
+
+        scrollToBottom();
+        renderConversationList(); // Update active state
+    } catch (err) {
+        console.error("Failed to open conversation:", err);
+    } finally {
+        setStatus("Ready");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// New Chat
+// ---------------------------------------------------------------------------
+newChatBtn.addEventListener("click", () => {
+    currentConversationId = null;
+    chatTitle.textContent = "New Chat";
+    chatSubtitle.textContent = "Start a conversation with your AI research assistant";
+
+    const chatContainer = document.querySelector(".chat");
+    if (chatContainer) {
+        chatContainer.classList.add("welcome-active");
+    }
+
+    // Reset URL query parameter
+    const url = new URL(window.location);
+    url.searchParams.delete("chatId");
+    window.history.pushState(null, "", url.toString());
+
+    // Hide header actions chevron
+    if (headerChevronBtn) {
+        headerChevronBtn.style.display = "none";
+    }
+
+    // Clear active badges container
+    const docsContainer = document.getElementById("headerDocs");
+    if (docsContainer) docsContainer.innerHTML = "";
+
+    // Show welcome screen
+    welcomeScreen.classList.remove("hidden");
+    messagesEl.querySelectorAll(".message").forEach((el) => el.remove());
+
+    // Highlight active sidebar conversations appropriately (none active)
+    document.querySelectorAll(".conv-item").forEach((el) => el.classList.remove("active"));
+});
+
+// ---------------------------------------------------------------------------
+// Welcome Card Prompts
+// ---------------------------------------------------------------------------
+document.querySelectorAll(".welcome-card").forEach((card) => {
+    card.addEventListener("click", () => {
+        const prompt = card.dataset.prompt;
+        if (prompt) {
+            messageInput.value = prompt;
+            messageInput.dispatchEvent(new Event("input"));
+            chatForm.dispatchEvent(new Event("submit", { cancelable: true }));
+        }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Message Builders
+// ---------------------------------------------------------------------------
+function enterMessageEditMode(rowEl, messageId, originalText) {
+    const bodyEl = rowEl.querySelector(".message-body");
+    const textEl = rowEl.querySelector(".message-text");
+    const timeEl = rowEl.querySelector(".message-time");
+    const editBtn = rowEl.querySelector(".edit-msg-btn");
+    
+    // Hide standard elements
+    textEl.style.display = "none";
+    timeEl.style.display = "none";
+    if (editBtn) editBtn.style.display = "none";
+    
+    const editContainer = document.createElement("div");
+    editContainer.className = "message-edit-container";
+    
+    const textarea = document.createElement("textarea");
+    textarea.className = "edit-mode-textarea";
+    textarea.value = originalText;
+    
+    const actions = document.createElement("div");
+    actions.className = "edit-actions";
+    actions.innerHTML = `
+        <button class="btn btn-primary btn-save">Save &amp; Submit</button>
+        <button class="btn btn-ghost btn-cancel">Cancel</button>
+    `;
+    
+    editContainer.appendChild(textarea);
+    editContainer.appendChild(actions);
+    bodyEl.insertBefore(editContainer, bodyEl.firstChild);
+    
+    actions.querySelector(".btn-cancel").addEventListener("click", () => {
+        editContainer.remove();
+        textEl.style.display = "";
+        timeEl.style.display = "";
+        if (editBtn) editBtn.style.display = "";
+    });
+    
+    actions.querySelector(".btn-save").addEventListener("click", async () => {
+        const newContent = textarea.value.trim();
+        if (!newContent || newContent === originalText) {
+            actions.querySelector(".btn-cancel").click();
+            return;
+        }
+        
+        editContainer.remove();
+        setStatus("Saving changes...", "busy");
+        
+        try {
+            // 1. PUT edited message
+            await api(`/api/messages/${messageId}`, {
+                method: "PUT",
+                body: JSON.stringify({ content: newContent })
+            });
+            
+            // 2. Find next message (assistant message) to trigger a retry
+            const nextRow = rowEl.nextElementSibling;
+            if (nextRow && nextRow.classList.contains("bot")) {
+                const nextMsgId = nextRow.querySelector(".retry-btn")?.dataset.id;
+                if (nextMsgId) {
+                    // Force retry of assistant answer using the updated context
+                    await retryMessage(nextMsgId);
+                } else {
+                    await openConversation(currentConversationId);
+                }
+            } else {
+                await openConversation(currentConversationId);
+            }
+        } catch (err) {
+            console.error("Failed to edit user message:", err);
+            alert("Error saving message changes.");
+            openConversation(currentConversationId);
+        }
+    });
+}
+
+function addUserMessage(text, timestamp, messageId) {
     const row = document.createElement("div");
-    row.className = `message ${type}`;
+    row.className = "message user";
     row.setAttribute("role", "article");
+    if (messageId) {
+        row.dataset.id = messageId;
+    }
 
-    // Avatar
-    const avatar = document.createElement("div");
-    avatar.className = `message-avatar ${type === "user" ? "user-avatar" : "bot-avatar"}`;
-    avatar.setAttribute("aria-hidden", "true");
-    avatar.textContent = type === "user" ? "You" : "AI";
+    const time = timestamp ? formatTime(timestamp) : formatTime(new Date());
 
-    // Body wrapper
-    const body = document.createElement("div");
-    body.className = "message-body";
+    row.innerHTML = `
+        <div class="message-avatar user-avatar" aria-hidden="true">You</div>
+        <div class="message-body">
+            <div class="message-text">${escapeHtml(text)}</div>
+            <div class="message-time">${time}</div>
+            ${messageId ? `<button class="edit-msg-btn" title="Edit message">✏️ Edit</button>` : ""}
+        </div>
+    `;
 
-    // Text bubble
-    const textEl = document.createElement("div");
-    textEl.className = "message-text";
+    if (messageId) {
+        row.querySelector(".edit-msg-btn")?.addEventListener("click", () => {
+            enterMessageEditMode(row, messageId, text);
+        });
+    }
 
-    body.appendChild(textEl);
-    row.appendChild(avatar);
-    row.appendChild(body);
-    messages.appendChild(row);
-
+    messagesEl.appendChild(row);
     scrollToBottom();
-    return { row, body, textEl };
+    return row;
 }
 
-/**
- * Append a user message bubble instantly.
- */
-function addUserMessage(text) {
-    const { textEl } = createMessageRow("user");
-    textEl.textContent = text;
-    scrollToBottom();
-}
-
-/**
- * Create a bot row that shows an animated typing indicator.
- * Returns handles to replace the indicator with real content.
- */
-function addBotTypingRow() {
+function addBotMessage(text, sources, timestamp, messageId) {
     const row = document.createElement("div");
     row.className = "message bot";
     row.setAttribute("role", "article");
 
-    // Avatar
-    const avatar = document.createElement("div");
-    avatar.className = "message-avatar bot-avatar";
-    avatar.setAttribute("aria-hidden", "true");
-    avatar.textContent = "AI";
+    const time = timestamp ? formatTime(timestamp) : formatTime(new Date());
 
-    // Body
-    const body = document.createElement("div");
-    body.className = "message-body";
+    row.innerHTML = `
+        <div class="message-avatar bot-avatar" aria-hidden="true">AI</div>
+        <div class="message-body">
+            <div class="message-text">${escapeHtml(text)}</div>
+            <div class="message-time">${time}</div>
+            <div class="message-actions">
+                <button class="msg-action-btn copy-btn" title="Copy">📋 Copy</button>
+                ${messageId ? `<button class="msg-action-btn retry-btn" data-id="${messageId}" title="Retry">🔄 Retry</button>` : ""}
+            </div>
+        </div>
+    `;
 
-    // Typing indicator
-    const indicator = document.createElement("div");
-    indicator.className = "typing-indicator";
-    for (let i = 0; i < 3; i++) {
-        const dot = document.createElement("span");
-        dot.className = "typing-dot";
-        dot.setAttribute("aria-hidden", "true");
-        indicator.appendChild(dot);
+    // Attach copy handler
+    row.querySelector(".copy-btn")?.addEventListener("click", () => {
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = row.querySelector(".copy-btn");
+            btn.textContent = "✓ Copied";
+            setTimeout(() => (btn.textContent = "📋 Copy"), 1500);
+        });
+    });
+
+    // Attach retry handler
+    row.querySelector(".retry-btn")?.addEventListener("click", () => {
+        retryMessage(messageId);
+    });
+
+    // Append sources if present
+    if (sources && sources.length > 0) {
+        const body = row.querySelector(".message-body");
+        appendSources(body, sources);
     }
 
-    body.appendChild(indicator);
-    row.appendChild(avatar);
-    row.appendChild(body);
-    messages.appendChild(row);
-    scrollToBottom();
-
-    // Returns a controller for this row
-    return {
-        /**
-         * Replace the typing indicator with a real text bubble.
-         * Returns the text element so the caller can stream tokens into it.
-         */
-        promoteToText(initialText = "") {
-            indicator.remove();
-
-            const textEl = document.createElement("div");
-            textEl.className = "message-text";
-            textEl.textContent = initialText;
-            body.appendChild(textEl);
-            scrollToBottom();
-            return { body, textEl };
-        },
-
-        /** Replace the indicator with an error bubble */
-        promoteToError(errorText) {
-            row.className = "message bot error";
-            indicator.remove();
-            const textEl = document.createElement("div");
-            textEl.className = "message-text";
-            textEl.textContent = errorText;
-            body.appendChild(textEl);
-            scrollToBottom();
-        }
-    };
-}
-
-/**
- * Stream tokens into an existing text element.
- */
-function appendToken(textEl, token) {
-    // Clear placeholder text on first real token
-    if (textEl.dataset.placeholder === "true") {
-        textEl.textContent = "";
-        delete textEl.dataset.placeholder;
-    }
-    textEl.textContent += token;
+    messagesEl.appendChild(row);
     scrollToBottom();
 }
 
-/**
- * Append pretty source cards below the answer bubble.
- */
+function addTypingIndicator() {
+    const row = document.createElement("div");
+    row.className = "message bot";
+    row.id = "typingRow";
+    row.setAttribute("role", "article");
+
+    row.innerHTML = `
+        <div class="message-avatar bot-avatar" aria-hidden="true">AI</div>
+        <div class="message-body">
+            <div class="typing-indicator">
+                <span class="typing-dot" aria-hidden="true"></span>
+                <span class="typing-dot" aria-hidden="true"></span>
+                <span class="typing-dot" aria-hidden="true"></span>
+            </div>
+        </div>
+    `;
+
+    messagesEl.appendChild(row);
+    scrollToBottom();
+    return row;
+}
+
+function removeTypingIndicator() {
+    document.getElementById("typingRow")?.remove();
+}
+
 function appendSources(body, sources) {
     if (!sources || sources.length === 0) return;
 
@@ -177,34 +558,163 @@ function appendSources(body, sources) {
             ? `parent ${src.parentNumber}`
             : `chunk ${src.chunkNumber}`;
 
-        const locEl = document.createElement("span");
-        locEl.className = "source-loc";
-        locEl.textContent = `${src.source} · ${loc}`;
+        card.innerHTML = `
+            <span class="source-loc">${escapeHtml(src.source)} · ${loc}</span>
+            <span class="source-score">sim ${src.similarity}</span>
+        `;
 
-        const scoreEl = document.createElement("span");
-        scoreEl.className = "source-score";
-        scoreEl.textContent = `sim ${src.similarity}`;
-
-        card.appendChild(locEl);
-        card.appendChild(scoreEl);
         block.appendChild(card);
     });
 
     body.appendChild(block);
-    scrollToBottom();
-}
-
-function scrollToBottom() {
-    messages.scrollTop = messages.scrollHeight;
 }
 
 // ---------------------------------------------------------------------------
-// SSE streaming
+// SSE Streaming Chat
 // ---------------------------------------------------------------------------
+async function streamChat(question, chunkingMethod, userRow) {
+    const response = await fetch(`${API_BASE}/api/conversations/${currentConversationId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: question, chunkingMethod }),
+    });
 
-/**
- * Parse a single SSE block (event: / data: lines) into { event, data }.
- */
+    if (!response.ok || !response.body) {
+        throw new Error(`Server error ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let sources = [];
+    let fullResponse = "";
+    let textEl = null;
+    let bodyEl = null;
+    let messageId = null;
+    let createdAt = null;
+
+    // Remove typing indicator and create bot message row
+    removeTypingIndicator();
+
+    const botRow = document.createElement("div");
+    botRow.className = "message bot";
+    botRow.setAttribute("role", "article");
+    botRow.innerHTML = `
+        <div class="message-avatar bot-avatar" aria-hidden="true">AI</div>
+        <div class="message-body">
+            <div class="message-text"></div>
+        </div>
+    `;
+    messagesEl.appendChild(botRow);
+    textEl = botRow.querySelector(".message-text");
+    bodyEl = botRow.querySelector(".message-body");
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() || "";
+
+        for (const block of blocks) {
+            if (!block.trim()) continue;
+
+            const parsed = parseSseBlock(block);
+            let payload;
+            try {
+                payload = JSON.parse(parsed.data);
+            } catch {
+                continue;
+            }
+
+            if (parsed.event === "user_saved") {
+                const savedMsgId = payload.messageId;
+                const savedCreatedAt = payload.createdAt;
+                if (userRow) {
+                    userRow.dataset.id = savedMsgId;
+                    userRow.querySelector(".message-time").textContent = formatTime(savedCreatedAt || new Date());
+                    
+                    const uBodyEl = userRow.querySelector(".message-body");
+                    const uEditBtn = document.createElement("button");
+                    uEditBtn.className = "edit-msg-btn";
+                    uEditBtn.title = "Edit message";
+                    uEditBtn.textContent = "✏️ Edit";
+                    uEditBtn.addEventListener("click", () => {
+                        enterMessageEditMode(userRow, savedMsgId, question);
+                    });
+                    uBodyEl.appendChild(uEditBtn);
+                }
+            }
+
+            if (parsed.event === "title_updated") {
+                const newTitle = payload.title;
+                const eventConvId = payload.conversationId;
+                if (eventConvId === currentConversationId) {
+                    chatTitle.textContent = newTitle;
+                }
+                await loadConversations();
+            }
+
+            if (parsed.event === "sources") {
+                sources = payload.sources || [];
+            }
+
+            if (parsed.event === "token") {
+                const token = payload.token || "";
+                fullResponse += token;
+                textEl.textContent = fullResponse;
+                scrollToBottom();
+            }
+
+            if (parsed.event === "done") {
+                messageId = payload.messageId;
+                createdAt = payload.createdAt;
+
+                // Add timestamp
+                const timeEl = document.createElement("div");
+                timeEl.className = "message-time";
+                timeEl.textContent = formatTime(createdAt || new Date());
+                bodyEl.appendChild(timeEl);
+
+                // Add action buttons
+                const actionsEl = document.createElement("div");
+                actionsEl.className = "message-actions";
+                actionsEl.innerHTML = `
+                    <button class="msg-action-btn copy-btn" title="Copy">📋 Copy</button>
+                    ${messageId ? `<button class="msg-action-btn retry-btn" data-id="${messageId}" title="Retry">🔄 Retry</button>` : ""}
+                `;
+                bodyEl.appendChild(actionsEl);
+
+                // Copy handler
+                actionsEl.querySelector(".copy-btn")?.addEventListener("click", () => {
+                    navigator.clipboard.writeText(fullResponse).then(() => {
+                        const btn = actionsEl.querySelector(".copy-btn");
+                        btn.textContent = "✓ Copied";
+                        setTimeout(() => (btn.textContent = "📋 Copy"), 1500);
+                    });
+                });
+
+                // Retry handler
+                actionsEl.querySelector(".retry-btn")?.addEventListener("click", () => {
+                    retryMessage(messageId);
+                });
+
+                appendSources(bodyEl, sources);
+
+                // Refresh sidebar
+                await loadConversations();
+            }
+
+            if (parsed.event === "error") {
+                throw new Error(payload.error || "Something went wrong");
+            }
+        }
+    }
+
+    return { fullResponse, sources };
+}
+
 function parseSseBlock(block) {
     const lines = block.split("\n");
     let event = "message";
@@ -218,145 +728,425 @@ function parseSseBlock(block) {
     return { event, data: dataLines.join("\n") };
 }
 
-/**
- * Open an SSE stream for the given question and pipe tokens into `textEl`.
- * Resolves with the sources array when the stream is done.
- */
-async function streamChat(question, chunkingMethod, typingRow) {
-    const response = await fetch("http://localhost:3000/chat/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: question, chunkingMethod })
-    });
+// ---------------------------------------------------------------------------
+// Retry Message
+// ---------------------------------------------------------------------------
+async function retryMessage(messageId) {
+    if (isStreaming || !messageId) return;
 
-    if (!response.ok || !response.body) {
-        throw new Error(`Server error ${response.status} — check that the backend is running.`);
-    }
+    isStreaming = true;
+    setStatus("Retrying…", "busy");
+    setFormBusy(true);
 
-    const reader  = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer    = "";
-    let sources   = [];
-    let textEl    = null;   // initialised on first token
-    let body      = null;
+    const typingRow = addTypingIndicator();
 
-    while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+    try {
+        const response = await fetch(`${API_BASE}/api/messages/${messageId}/retry`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chunkingMethod: chunkingMethodSelect.value }),
+        });
 
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() || "";
-
-        for (const block of blocks) {
-            if (!block.trim()) continue;
-
-            const parsed  = parseSseBlock(block);
-            let   payload;
-
-            try {
-                payload = JSON.parse(parsed.data);
-            } catch {
-                continue;
-            }
-
-            if (parsed.event === "sources") {
-                sources = payload.sources || [];
-            }
-
-            if (parsed.event === "token") {
-                // Promote typing indicator → text bubble on first token
-                if (!textEl) {
-                    ({ body, textEl } = typingRow.promoteToText(""));
-                }
-                appendToken(textEl, payload.token || "");
-            }
-
-            if (parsed.event === "error") {
-                throw new Error(payload.error || "Something went wrong");
-            }
-
-            if (parsed.event === "done") {
-                // If no tokens were emitted (empty context / refusal), promote now
-                if (!textEl) {
-                    ({ body, textEl } = typingRow.promoteToText("I don't know based on the provided documents."));
-                }
-                appendSources(body, sources);
-            }
+        if (!response.ok || !response.body) {
+            throw new Error(`Retry failed: ${response.status}`);
         }
+
+        // Stream the retried response
+        removeTypingIndicator();
+        // Reload the conversation to show updated messages
+        await openConversation(currentConversationId);
+    } catch (err) {
+        removeTypingIndicator();
+        console.error("Retry failed:", err);
+    } finally {
+        isStreaming = false;
+        setFormBusy(false);
+        setStatus("Ready");
     }
 }
 
 // ---------------------------------------------------------------------------
-// Disable / enable form controls
-// ---------------------------------------------------------------------------
-function setFormBusy(busy) {
-    messageInput.disabled          = busy;
-    sendButton.disabled            = busy;
-    chunkingMethodSelect.disabled  = busy;
-    ingestButton.disabled          = busy;
-}
-
-// ---------------------------------------------------------------------------
-// Chat submit
+// Chat Submit
 // ---------------------------------------------------------------------------
 chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const question      = messageInput.value.trim();
+    const question = messageInput.value.trim();
     const chunkingMethod = chunkingMethodSelect.value;
 
-    if (!question) return;
+    if (!question || isStreaming) return;
 
-    addUserMessage(question);
+    // Auto-create conversation if none selected
+    if (!currentConversationId) {
+        try {
+            const data = await api("/api/conversations", {
+                method: "POST",
+                body: JSON.stringify({ title: "New Chat" }),
+            });
+            currentConversationId = data.conversation._id;
+            const chatContainer = document.querySelector(".chat");
+            if (chatContainer) {
+                chatContainer.classList.remove("welcome-active");
+            }
+            if (headerChevronBtn) {
+                headerChevronBtn.style.display = "inline-flex";
+            }
+        } catch (err) {
+            console.error("Failed to create conversation:", err);
+            return;
+        }
+    }
+
+    // Hide welcome screen
+    welcomeScreen.classList.add("hidden");
+
+    const userRow = addUserMessage(question);
     messageInput.value = "";
+    messageInput.style.height = "auto";
 
-    const typingRow = addBotTypingRow();
+    const typingRow = addTypingIndicator();
+
+    isStreaming = true;
     setFormBusy(true);
     setStatus("Thinking…", "busy");
 
     try {
-        await streamChat(question, chunkingMethod, typingRow);
+        await streamChat(question, chunkingMethod, userRow);
     } catch (err) {
-        typingRow.promoteToError(err.message);
+        removeTypingIndicator();
+        // Show error as bot message
+        const errRow = document.createElement("div");
+        errRow.className = "message bot error";
+        errRow.innerHTML = `
+            <div class="message-avatar bot-avatar" aria-hidden="true">AI</div>
+            <div class="message-body">
+                <div class="message-text">${escapeHtml(err.message)}</div>
+            </div>
+        `;
+        messagesEl.appendChild(errRow);
+        scrollToBottom();
     } finally {
+        isStreaming = false;
         setFormBusy(false);
-        setStatus("Ready", "idle");
+        setStatus("Ready");
         messageInput.focus();
     }
 });
 
-// ---------------------------------------------------------------------------
-// Ingest
-// ---------------------------------------------------------------------------
-ingestButton.addEventListener("click", async () => {
-    const chunkingMethod = chunkingMethodSelect.value;
-
-    setFormBusy(true);
-    setStatus("Ingesting…", "busy");
-
-    try {
-        const response = await fetch("http://localhost:3000/ingest", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chunkingMethod })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            throw new Error(data.error || "Ingestion failed — check server logs.");
-        }
-
-        // Show a success bot message
-        const { textEl } = createMessageRow("bot");
-        textEl.innerHTML = `✓ Ingested <strong>${data.recordsStored}</strong> records into <code>${data.collection}</code>.`;
-    } catch (err) {
-        const { row, textEl } = createMessageRow("bot");
-        row.className = "message bot error";
-        textEl.textContent = err.message;
-    } finally {
-        setFormBusy(false);
-        setStatus("Ready", "idle");
+// Enter to send (Shift+Enter for newline)
+messageInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        chatForm.dispatchEvent(new Event("submit", { cancelable: true }));
     }
 });
+
+// ---------------------------------------------------------------------------
+// File Upload
+// ---------------------------------------------------------------------------
+uploadBtn.addEventListener("click", () => fileInput.click());
+
+fileInput.addEventListener("change", async () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    setStatus("Uploading…", "busy");
+    setFormBusy(true);
+
+    try {
+        // Auto-create conversation if none selected
+        if (!currentConversationId) {
+            const convData = await api("/api/conversations", {
+                method: "POST",
+                body: JSON.stringify({ title: "New Chat" }),
+            });
+            currentConversationId = convData.conversation._id;
+            chatTitle.textContent = "New Chat";
+            chatSubtitle.textContent = "Start a conversation with your AI research assistant";
+            const chatContainer = document.querySelector(".chat");
+            if (chatContainer) {
+                chatContainer.classList.remove("welcome-active");
+            }
+            if (headerChevronBtn) {
+                headerChevronBtn.style.display = "inline-flex";
+            }
+        }
+
+        const formData = new FormData();
+        formData.append("document", file);
+        formData.append("chunkingMethod", chunkingMethodSelect.value);
+        formData.append("conversationId", currentConversationId);
+
+        const res = await fetch(`${API_BASE}/api/documents/upload`, {
+            method: "POST",
+            body: formData,
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.error || "Upload failed");
+        }
+
+        // Show success in chat
+        welcomeScreen.classList.add("hidden");
+        const successRow = document.createElement("div");
+        successRow.className = "message bot";
+        successRow.innerHTML = `
+            <div class="message-avatar bot-avatar" aria-hidden="true">AI</div>
+            <div class="message-body">
+                <div class="message-text">✓ Uploaded <strong>${escapeHtml(file.name)}</strong> — ${data.ingestion?.recordsStored || 0} chunks ingested into <code>${escapeHtml(data.ingestion?.collection || "")}</code>.</div>
+            </div>
+        `;
+        messagesEl.appendChild(successRow);
+        scrollToBottom();
+
+        // Render updated document badges in header
+        await renderConversationDocuments(currentConversationId);
+    } catch (err) {
+        console.error("Upload failed:", err);
+        // Try legacy ingest as fallback
+        try {
+            const res = await fetch(`${API_BASE}/ingest`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chunkingMethod: chunkingMethodSelect.value }),
+            });
+            const data = await res.json();
+            if (res.ok) {
+                welcomeScreen.classList.add("hidden");
+                const successRow = document.createElement("div");
+                successRow.className = "message bot";
+                successRow.innerHTML = `
+                    <div class="message-avatar bot-avatar" aria-hidden="true">AI</div>
+                    <div class="message-body">
+                        <div class="message-text">✓ Ingested <strong>${data.recordsStored}</strong> records into <code>${escapeHtml(data.collection)}</code>.</div>
+                    </div>
+                `;
+                messagesEl.appendChild(successRow);
+                scrollToBottom();
+            }
+        } catch (fallbackErr) {
+            console.error("Fallback ingest failed:", fallbackErr);
+        }
+    } finally {
+        setFormBusy(false);
+        setStatus("Ready");
+        fileInput.value = "";
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Context Menu
+// ---------------------------------------------------------------------------
+function showContextMenu(e, conversationId, alignElement = null) {
+    contextMenuTargetId = conversationId;
+    const conv = conversations.find((c) => c._id === conversationId);
+    if (!conv) return;
+
+    // Update pin label
+    contextMenu.querySelector(".ctx-pin-label").textContent = conv.isPinned ? "Unpin" : "Pin";
+
+    contextMenu.hidden = false;
+
+    const menuWidth = 180;
+    const menuHeight = 150;
+
+    let x, y;
+    if (alignElement) {
+        // Aligned below the chevron button
+        const rect = alignElement.getBoundingClientRect();
+        x = rect.left;
+        y = rect.bottom + 4;
+    } else {
+        // Position at click coordinates
+        x = e.clientX;
+        y = e.clientY;
+    }
+
+    if (x + menuWidth > window.innerWidth) x = window.innerWidth - menuWidth - 8;
+    if (y + menuHeight > window.innerHeight) y = window.innerHeight - menuHeight - 8;
+
+    contextMenu.style.left = x + "px";
+    contextMenu.style.top = y + "px";
+}
+
+// Bind active header actions chevron dropdown
+if (headerChevronBtn) {
+    headerChevronBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (currentConversationId) {
+            showContextMenu(e, currentConversationId, headerChevronBtn);
+        }
+    });
+}
+
+// Handle context menu actions
+contextMenu.querySelectorAll(".ctx-item").forEach((item) => {
+    item.addEventListener("click", async () => {
+        const action = item.dataset.action;
+        contextMenu.hidden = true;
+
+        if (!contextMenuTargetId) return;
+
+        try {
+            switch (action) {
+                case "rename":
+                    showRenameDialog(contextMenuTargetId);
+                    break;
+                case "pin": {
+                    const targetConv = conversations.find((c) => c._id === contextMenuTargetId);
+                    if (targetConv && !targetConv.isPinned) {
+                        const pinnedCount = conversations.filter((c) => c.isPinned).length;
+                        if (pinnedCount >= 5) {
+                            alert("You can only pin up to 5 chats.");
+                            break;
+                        }
+                    }
+                    await api(`/api/conversations/${contextMenuTargetId}/pin`, { method: "PUT" });
+                    await loadConversations();
+                    break;
+                }
+                case "delete":
+                    if (confirm("Delete this conversation? This cannot be undone.")) {
+                        await api(`/api/conversations/${contextMenuTargetId}`, { method: "DELETE" });
+                        if (contextMenuTargetId === currentConversationId) {
+                            currentConversationId = null;
+                            chatTitle.textContent = "New Chat";
+                            if (headerChevronBtn) {
+                                headerChevronBtn.style.display = "none";
+                            }
+                            const chatContainer = document.querySelector(".chat");
+                            if (chatContainer) {
+                                chatContainer.classList.add("welcome-active");
+                            }
+                            // Reset URL query parameter
+                            const url = new URL(window.location);
+                            url.searchParams.delete("chatId");
+                            window.history.pushState(null, "", url.toString());
+
+                            messagesEl.querySelectorAll(".message").forEach((el) => el.remove());
+                            welcomeScreen.classList.remove("hidden");
+                        }
+                        await loadConversations();
+                    }
+                    break;
+            }
+        } catch (err) {
+            console.error(`Action "${action}" failed:`, err);
+        }
+    });
+});
+
+// Close context menu on outside click
+document.addEventListener("click", (e) => {
+    if (!contextMenu.contains(e.target) && !e.target.closest(".conv-item-more")) {
+        contextMenu.hidden = true;
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Rename Dialog
+// ---------------------------------------------------------------------------
+function showRenameDialog(conversationId) {
+    contextMenuTargetId = conversationId;
+    const conv = conversations.find((c) => c._id === conversationId);
+    renameInput.value = conv?.title || "";
+    renameOverlay.hidden = false;
+    renameInput.focus();
+    renameInput.select();
+}
+
+renameSaveBtn.addEventListener("click", async () => {
+    const newTitle = renameInput.value.trim();
+    if (!newTitle || !contextMenuTargetId) return;
+
+    try {
+        await api(`/api/conversations/${contextMenuTargetId}/title`, {
+            method: "PUT",
+            body: JSON.stringify({ title: newTitle }),
+        });
+
+        if (contextMenuTargetId === currentConversationId) {
+            chatTitle.textContent = newTitle;
+        }
+
+        await loadConversations();
+    } catch (err) {
+        console.error("Rename failed:", err);
+    }
+
+    renameOverlay.hidden = true;
+});
+
+renameCancelBtn.addEventListener("click", () => {
+    renameOverlay.hidden = true;
+});
+
+renameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") renameSaveBtn.click();
+    if (e.key === "Escape") renameCancelBtn.click();
+});
+
+// ---------------------------------------------------------------------------
+// Form Busy State
+// ---------------------------------------------------------------------------
+function setFormBusy(busy) {
+    messageInput.disabled = busy;
+    sendButton.disabled = busy;
+    chunkingMethodSelect.disabled = busy;
+}
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+function scrollToBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatTime(dateStr) {
+    try {
+        const date = new Date(dateStr);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+
+        if (diffMins < 1) return "Just now";
+        if (diffMins < 60) return `${diffMins}m ago`;
+
+        const diffHrs = Math.floor(diffMins / 60);
+        if (diffHrs < 24) return `${diffHrs}h ago`;
+
+        return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    } catch {
+        return "";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+(async function init() {
+    await loadConversations();
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const chatId = urlParams.get("chatId");
+    if (chatId) {
+        const hasConv = conversations.some((c) => c._id === chatId);
+        if (hasConv) {
+            await openConversation(chatId);
+        } else {
+            const chatContainer = document.querySelector(".chat");
+            if (chatContainer) chatContainer.classList.add("welcome-active");
+        }
+    } else {
+        const chatContainer = document.querySelector(".chat");
+        if (chatContainer) chatContainer.classList.add("welcome-active");
+    }
+})();

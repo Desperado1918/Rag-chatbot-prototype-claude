@@ -1,0 +1,4 @@
+{"event":"message_sent","timestamp":"2026-06-30T06:07:21.926Z","conversationId":"6a435d1934cf08e12cadda8d"}
+{"event":"generation_completed","timestamp":"2026-06-30T06:08:40.919Z","conversationId":"6a435d1934cf08e12cadda8d","durationMs":78992}
+{"event":"message_sent","timestamp":"2026-06-30T11:36:15.307Z","conversationId":"6a43aa2f34cf08e12cadda95"}
+{"event":"generation_completed","timestamp":"2026-06-30T11:37:09.479Z","conversationId":"6a43aa2f34cf08e12cadda95","durationMs":54171}
