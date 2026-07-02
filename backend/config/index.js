@@ -9,6 +9,11 @@ require("dotenv").config();
 
 const config = {
     // -----------------------------------------------------------------------
+    // Environment
+    // -----------------------------------------------------------------------
+    nodeEnv: process.env.NODE_ENV || "development",
+
+    // -----------------------------------------------------------------------
     // Server
     // -----------------------------------------------------------------------
     port: parseInt(process.env.PORT, 10) || 3000,
@@ -19,13 +24,34 @@ const config = {
     mongoUri: process.env.MONGODB_URI || "mongodb://localhost:27017/rag-chatbot",
 
     // -----------------------------------------------------------------------
+    // LLM Provider — 'ollama' (default) or 'openai'
+    // -----------------------------------------------------------------------
+    chatProvider: process.env.CHAT_PROVIDER || "ollama",
+
+    // -----------------------------------------------------------------------
     // Ollama — Local LLM
     // -----------------------------------------------------------------------
     ollama: {
-        baseUrl: process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
-        chatModel: process.env.OLLAMA_MODEL || "qwen2.5:7b",
+        baseUrl: process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
+        chatModel: process.env.CHAT_MODEL || process.env.OLLAMA_MODEL || "qwen2.5:7b",
         embeddingModel: process.env.OLLAMA_EMBEDDING_MODEL || "nomic-embed-text",
         contextWindow: parseInt(process.env.OLLAMA_CONTEXT_WINDOW, 10) || 8192,
+    },
+
+    // -----------------------------------------------------------------------
+    // OpenAI — Only used when CHAT_PROVIDER=openai
+    // -----------------------------------------------------------------------
+    openai: {
+        apiKey: process.env.OPENAI_API_KEY || "",
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    },
+
+    // -----------------------------------------------------------------------
+    // Embeddings — @xenova/transformers (in-process, no server needed)
+    // -----------------------------------------------------------------------
+    embedding: {
+        model: process.env.EMBEDDING_MODEL || "Xenova/all-MiniLM-L6-v2",
+        dimensions: 384, // all-MiniLM-L6-v2 outputs 384-dim vectors
     },
 
     // -----------------------------------------------------------------------
@@ -33,34 +59,24 @@ const config = {
     // -----------------------------------------------------------------------
     chroma: {
         url: process.env.CHROMA_URL || "http://localhost:8000",
-    },
-
-    // -----------------------------------------------------------------------
-    // PageIndex
-    // -----------------------------------------------------------------------
-    pageindex: {
-        apiKey: process.env.PAGEINDEX_API_KEY || "",
+        collectionName: "conversation_chunks",
     },
 
     // -----------------------------------------------------------------------
     // Retrieval Tuning
     // -----------------------------------------------------------------------
     retrieval: {
-        retrievalCount: 20,          // Wider initial net for hybrid re-ranker
-        topNChunks: 5,               // Keep top 5 after re-ranking
-        similarityThreshold: 0.40,   // Minimum cosine similarity to pass gate
-        hybridWeightSemantic: 0.7,   // 70% cosine similarity
-        hybridWeightKeyword: 0.3,    // 30% keyword match
+        topK: 5,                     // Number of chunks to retrieve
+        similarityThreshold: 0.40,   // Minimum cosine similarity to pass
+        slidingWindowSize: 10,       // Recent messages to include in prompt
     },
 
     // -----------------------------------------------------------------------
     // Chunking Parameters
     // -----------------------------------------------------------------------
     chunking: {
-        standardChunkSize: 1200,
-        parentChunkSize: 2200,
-        childChunkSize: 500,
-        overlapSize: 80,
+        maxTokens: 500,              // ~500 tokens per chunk
+        overlapTokens: 50,           // ~50 token overlap
         separators: ["\n\n", "\n", ". ", " "],
     },
 
@@ -68,7 +84,6 @@ const config = {
     // Document Defaults
     // -----------------------------------------------------------------------
     documents: {
-        defaultPath: "./documents/notes.pdf",
         uploadDir: "./uploads",
     },
 
@@ -76,7 +91,7 @@ const config = {
     // LLM Generation
     // -----------------------------------------------------------------------
     generation: {
-        temperature: 0.0,
+        temperature: 0.7,
         topP: 0.9,
         repeatPenalty: 1.1,
     },
@@ -85,22 +100,22 @@ const config = {
     // Conversation
     // -----------------------------------------------------------------------
     conversation: {
-        titleGenerationThreshold: 2,  // Generate title after N user messages
-        summaryThreshold: 20,         // Summarize after N messages
-        maxTitleLength: 5,            // Max words in auto-generated title
+        titleGenerationThreshold: 1,  // Generate title after first exchange
+        maxTitleLength: 7,            // Max words in auto-generated title
     },
 
     // -----------------------------------------------------------------------
-    // Analytics
+    // Metadata Mirror
     // -----------------------------------------------------------------------
-    analytics: {
-        eventsFile: "./analytics/events.jsonl",
-    },
+    metadataFilePath: process.env.METADATA_FILE_PATH || "./data/chats-metadata.json",
+    metadataDebounceMs: 300,
 
     // -----------------------------------------------------------------------
-    // Safe Refusal
+    // Logging (pino)
     // -----------------------------------------------------------------------
-    safeUnknownAnswer: "I don't know based on the provided documents.",
+    log: {
+        level: process.env.LOG_LEVEL || "info",
+    },
 };
 
 module.exports = config;

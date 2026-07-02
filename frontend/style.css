@@ -55,6 +55,37 @@
 }
 
 /* ============================================================
+   Design Tokens — Light Mode
+   ============================================================ */
+body.light-theme {
+    /* Backgrounds */
+    --bg-base: #f7f7f8;
+    --bg-surface: #ffffff;
+    --bg-elevated: #f0f0f0;
+    --bg-hover: #e6e6e6;
+    --bg-glass: rgba(247, 247, 248, 0.75);
+    --bg-active: rgba(0, 0, 0, 0.05);
+
+    /* Borders */
+    --border-subtle: rgba(0, 0, 0, 0.06);
+    --border-default: rgba(0, 0, 0, 0.12);
+    --border-strong: rgba(0, 0, 0, 0.22);
+
+    /* Accent — minimal dark */
+    --accent-1: #171717;
+    --accent-2: #000000;
+    --accent-grad: linear-gradient(135deg, #171717 0%, #333333 100%);
+
+    /* Text */
+    --text-primary: #171717;
+    --text-secondary: #555555;
+    --text-muted: #777777;
+
+    /* Sidebar */
+    --sidebar-bg: #f7f7f8;
+}
+
+/* ============================================================
    Reset & Base
    ============================================================ */
 *,
@@ -1485,4 +1516,143 @@ body {
 
 .app.sidebar-collapsed .sidebar-toggle {
     display: flex;
+}
+
+/* ============================================================
+   Additional UI Elements Styling
+   ============================================================ */
+
+/* Warning Banner */
+.warning-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 24px;
+    background: var(--amber-dim);
+    border-bottom: 1px solid rgba(245, 158, 11, 0.3);
+    color: #fce7cf;
+    font-size: 13px;
+    position: relative;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    animation: slide-down 0.3s var(--ease-out);
+}
+
+@keyframes slide-down {
+    from {
+        transform: translateY(-100%);
+    }
+    to {
+        transform: translateY(0);
+    }
+}
+
+.warning-icon {
+    font-size: 16px;
+    color: var(--amber);
+}
+
+.warning-dismiss {
+    margin-left: auto;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s;
+}
+
+.warning-dismiss:hover {
+    color: var(--text-primary);
+}
+
+/* Stop Button */
+.stop-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 12px;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: var(--radius-md);
+    background: var(--red-dim);
+    color: #ff8a8a;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.stop-btn:hover {
+    background: rgba(239, 68, 68, 0.25);
+    border-color: var(--red);
+    color: #ffbaba;
+}
+
+/* Streaming cursor */
+.streaming-cursor::after {
+    content: "▋";
+    display: inline-block;
+    color: var(--text-primary);
+    animation: blink-cursor 0.8s steps(2, start) infinite;
+    margin-left: 2px;
+    font-size: 15px;
+    vertical-align: baseline;
+}
+
+@keyframes blink-cursor {
+    to {
+        visibility: hidden;
+    }
+}
+
+/* Code block container & copy button */
+pre {
+    position: relative;
+    background: var(--bg-base) !important;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    margin: 12px 0;
+    overflow-x: auto;
+}
+
+pre code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    background: transparent !important;
+    padding: 0 !important;
+    border: none !important;
+}
+
+.code-copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 4px 8px;
+    font-size: 11px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s, background 0.2s, color 0.2s;
+}
+
+pre:hover .code-copy-btn {
+    opacity: 1;
+}
+
+.code-copy-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--border-strong);
 }

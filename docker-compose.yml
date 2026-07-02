@@ -1,0 +1,36 @@
+# =============================================================================
+# Docker Compose — MongoDB + ChromaDB
+# =============================================================================
+# Brings up the two database services. Ollama is best installed natively
+# rather than in Docker, for GPU access — see README.md.
+#
+# Usage:
+#   docker-compose up -d
+#   docker-compose down
+# =============================================================================
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: rag-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    restart: unless-stopped
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: rag-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
+  chroma_data:

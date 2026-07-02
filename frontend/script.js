@@ -120,12 +120,12 @@ async function loadConversations(searchQuery = "", page = 1) {
         params.append("page", page);
         params.append("limit", 20);
 
-        const data = await api(`/api/conversations?${params.toString()}`);
+        const data = await api(`/api/chats?${params.toString()}`);
         
         if (page === 1) {
-            conversations = data.conversations || [];
+            conversations = data.chats || [];
         } else {
-            conversations = [...conversations, ...(data.conversations || [])];
+            conversations = [...conversations, ...(data.chats || [])];
         }
 
         hasMoreConversations = data.pagination && data.pagination.page < data.pagination.totalPages;
@@ -174,10 +174,29 @@ function renderConversationList() {
     }
 
     if (regular.length > 0) {
-        if (pinned.length > 0 || favorites.length > 0) {
-            html += `<div class="conv-section-label">Recent</div>`;
+        // Group regular by date group
+        const groups = {
+            "Today": [],
+            "Yesterday": [],
+            "Previous 7 Days": [],
+            "Older": []
+        };
+        
+        for (const conv of regular) {
+            const groupName = getDateGroup(conv.updatedAt || conv.createdAt);
+            if (groups[groupName]) {
+                groups[groupName].push(conv);
+            } else {
+                groups["Older"].push(conv);
+            }
         }
-        html += regular.map(renderConvItem).join("");
+        
+        for (const [groupName, groupConvs] of Object.entries(groups)) {
+            if (groupConvs.length > 0) {
+                html += `<div class="conv-section-label">${groupName}</div>`;
+                html += groupConvs.map(renderConvItem).join("");
+            }
+        }
     }
 
     conversationList.innerHTML = html;
@@ -201,6 +220,9 @@ function renderConvItem(conv) {
     const badges = [];
     if (conv.isPinned) {
         badges.push(`<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted); opacity: 0.8; margin-left: 4px;"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-.44-1.24l-2.78-3.47A2 2 0 0 1 15 9.3V5a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4.3a2 2 0 0 1-.78 1.23l-2.78 3.5A2 2 0 0 0 5 15.24V17z"></path></svg>`);
+    }
+    if (conv.isFavorited) {
+        badges.push(`<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--amber); opacity: 0.9; margin-left: 4px;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`);
     }
 
     const preview = conv.lastMessagePreview
@@ -275,8 +297,8 @@ async function openConversation(id) {
     window.history.pushState(null, "", url.toString());
 
     try {
-        const data = await api(`/api/conversations/${id}`);
-        const conv = data.conversation;
+        const data = await api(`/api/chats/${id}`);
+        const conv = data.chat;
         const messages = data.messages || [];
 
         chatTitle.textContent = conv.title;
@@ -477,24 +499,51 @@ function addBotMessage(text, sources, timestamp, messageId) {
 
     const time = timestamp ? formatTime(timestamp) : formatTime(new Date());
 
+    // Render markdown with sanitization
+    let renderedText;
+    if (typeof marked !== "undefined" && typeof DOMPurify !== "undefined") {
+        renderedText = DOMPurify.sanitize(marked.parse(text));
+    } else {
+        renderedText = escapeHtml(text);
+    }
+
     row.innerHTML = `
         <div class="message-avatar bot-avatar" aria-hidden="true">AI</div>
         <div class="message-body">
-            <div class="message-text">${escapeHtml(text)}</div>
+            <div class="message-text">${renderedText}</div>
             <div class="message-time">${time}</div>
             <div class="message-actions">
-                <button class="msg-action-btn copy-btn" title="Copy">📋 Copy</button>
-                ${messageId ? `<button class="msg-action-btn retry-btn" data-id="${messageId}" title="Retry">🔄 Retry</button>` : ""}
+                <button class="msg-action-btn copy-btn" title="Copy">Copy</button>
+                ${messageId ? `<button class="msg-action-btn retry-btn" data-id="${messageId}" title="Retry">Retry</button>` : ""}
             </div>
         </div>
     `;
+
+    // Syntax highlight code blocks
+    if (typeof hljs !== "undefined") {
+        row.querySelectorAll("pre code").forEach(block => {
+            hljs.highlightElement(block);
+            const pre = block.parentElement;
+            const copyBtn = document.createElement("button");
+            copyBtn.className = "code-copy-btn";
+            copyBtn.textContent = "Copy";
+            copyBtn.addEventListener("click", () => {
+                navigator.clipboard.writeText(block.textContent).then(() => {
+                    copyBtn.textContent = "Copied!";
+                    setTimeout(() => copyBtn.textContent = "Copy", 1500);
+                });
+            });
+            pre.style.position = "relative";
+            pre.appendChild(copyBtn);
+        });
+    }
 
     // Attach copy handler
     row.querySelector(".copy-btn")?.addEventListener("click", () => {
         navigator.clipboard.writeText(text).then(() => {
             const btn = row.querySelector(".copy-btn");
-            btn.textContent = "✓ Copied";
-            setTimeout(() => (btn.textContent = "📋 Copy"), 1500);
+            btn.textContent = "Copied!";
+            setTimeout(() => (btn.textContent = "Copy"), 1500);
         });
     });
 
@@ -553,15 +602,42 @@ function appendSources(body, sources) {
     sources.forEach((src) => {
         const card = document.createElement("div");
         card.className = "source-card";
+        card.style.cursor = "pointer";
+        card.style.flexDirection = "column";
+        card.style.alignItems = "stretch";
+        card.style.gap = "8px";
 
-        const loc = src.parentNumber
-            ? `parent ${src.parentNumber}`
-            : `chunk ${src.chunkNumber}`;
+        const docName = src.metadata?.documentName || src.metadata?.source || src.source || "Document";
+        const chunkIdx = src.metadata?.chunkIndex !== undefined ? `Chunk ${src.metadata.chunkIndex}` : "";
+        const simScore = typeof src.similarity === "number" ? `sim ${(src.similarity * 100).toFixed(0)}%` : `sim ${src.similarity || "N/A"}`;
 
         card.innerHTML = `
-            <span class="source-loc">${escapeHtml(src.source)} · ${loc}</span>
-            <span class="source-score">sim ${src.similarity}</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                <span class="source-loc" style="font-weight: 500;">📄 ${escapeHtml(docName)} ${chunkIdx ? `· ${chunkIdx}` : ""}</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="source-score">${simScore}</span>
+                    <span class="source-toggle-icon" style="transition: transform 0.2s; font-size: 10px; color: var(--text-muted);">▶</span>
+                </div>
+            </div>
+            <div class="source-content" style="display: none; font-size: 12px; line-height: 1.5; color: var(--text-secondary); background: rgba(0,0,0,0.15); padding: 8px; border-radius: 6px; margin-top: 4px; white-space: pre-wrap; border: 1px solid var(--border-subtle);">
+                ${escapeHtml(src.text || "No text content available.")}
+            </div>
         `;
+
+        card.addEventListener("click", (e) => {
+            // Prevent toggling if selecting text
+            if (window.getSelection().toString()) return;
+            
+            const contentEl = card.querySelector(".source-content");
+            const toggleIcon = card.querySelector(".source-toggle-icon");
+            if (contentEl.style.display === "none") {
+                contentEl.style.display = "block";
+                toggleIcon.style.transform = "rotate(90deg)";
+            } else {
+                contentEl.style.display = "none";
+                toggleIcon.style.transform = "";
+            }
+        });
 
         block.appendChild(card);
     });
@@ -572,11 +648,18 @@ function appendSources(body, sources) {
 // ---------------------------------------------------------------------------
 // SSE Streaming Chat
 // ---------------------------------------------------------------------------
+let currentAbortController = null;
+
 async function streamChat(question, chunkingMethod, userRow) {
-    const response = await fetch(`${API_BASE}/api/conversations/${currentConversationId}/messages`, {
+    currentAbortController = new AbortController();
+    const stopBtn = document.getElementById("stopButton");
+    if (stopBtn) stopBtn.hidden = false;
+
+    const response = await fetch(`${API_BASE}/api/chats/${currentConversationId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: question, chunkingMethod }),
+        body: JSON.stringify({ content: question, chunkingMethod }),
+        signal: currentAbortController.signal,
     });
 
     if (!response.ok || !response.body) {
@@ -593,7 +676,6 @@ async function streamChat(question, chunkingMethod, userRow) {
     let messageId = null;
     let createdAt = null;
 
-    // Remove typing indicator and create bot message row
     removeTypingIndicator();
 
     const botRow = document.createElement("div");
@@ -602,130 +684,141 @@ async function streamChat(question, chunkingMethod, userRow) {
     botRow.innerHTML = `
         <div class="message-avatar bot-avatar" aria-hidden="true">AI</div>
         <div class="message-body">
-            <div class="message-text"></div>
+            <div class="message-text streaming-cursor"></div>
         </div>
     `;
     messagesEl.appendChild(botRow);
     textEl = botRow.querySelector(".message-text");
     bodyEl = botRow.querySelector(".message-body");
 
-    while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+    try {
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() || "";
+            buffer += decoder.decode(value, { stream: true });
+            const blocks = buffer.split("\n\n");
+            buffer = blocks.pop() || "";
 
-        for (const block of blocks) {
-            if (!block.trim()) continue;
+            for (const block of blocks) {
+                if (!block.trim()) continue;
 
-            const parsed = parseSseBlock(block);
-            let payload;
-            try {
-                payload = JSON.parse(parsed.data);
-            } catch {
-                continue;
-            }
-
-            if (parsed.event === "user_saved") {
-                const savedMsgId = payload.messageId;
-                const savedCreatedAt = payload.createdAt;
-                if (userRow) {
-                    userRow.dataset.id = savedMsgId;
-                    userRow.querySelector(".message-time").textContent = formatTime(savedCreatedAt || new Date());
-                    
-                    const uBodyEl = userRow.querySelector(".message-body");
-                    const uEditBtn = document.createElement("button");
-                    uEditBtn.className = "edit-msg-btn";
-                    uEditBtn.title = "Edit message";
-                    uEditBtn.textContent = "✏️ Edit";
-                    uEditBtn.addEventListener("click", () => {
-                        enterMessageEditMode(userRow, savedMsgId, question);
-                    });
-                    uBodyEl.appendChild(uEditBtn);
+                // New format: data: { type: "...", ... }
+                let payload;
+                try {
+                    const dataLine = block.split("\n").find(l => l.startsWith("data:"));
+                    if (!dataLine) continue;
+                    payload = JSON.parse(dataLine.slice(5).trim());
+                } catch {
+                    continue;
                 }
-            }
 
-            if (parsed.event === "title_updated") {
-                const newTitle = payload.title;
-                const eventConvId = payload.conversationId;
-                if (eventConvId === currentConversationId) {
-                    chatTitle.textContent = newTitle;
+                if (payload.type === "token") {
+                    fullResponse += payload.token || "";
+                    // Render markdown live
+                    if (typeof marked !== "undefined" && typeof DOMPurify !== "undefined") {
+                        textEl.innerHTML = DOMPurify.sanitize(marked.parse(fullResponse));
+                    } else {
+                        textEl.textContent = fullResponse;
+                    }
+                    scrollToBottom();
                 }
-                await loadConversations();
-            }
 
-            if (parsed.event === "sources") {
-                sources = payload.sources || [];
-            }
+                if (payload.type === "sources") {
+                    sources = payload.sources || [];
+                }
 
-            if (parsed.event === "token") {
-                const token = payload.token || "";
-                fullResponse += token;
-                textEl.textContent = fullResponse;
-                scrollToBottom();
-            }
+                if (payload.type === "done") {
+                    messageId = payload.assistantMessage?._id;
+                    createdAt = payload.assistantMessage?.createdAt;
+                    const userMsgId = payload.userMessage?._id;
+                    const userCreatedAt = payload.userMessage?.createdAt;
 
-            if (parsed.event === "done") {
-                messageId = payload.messageId;
-                createdAt = payload.createdAt;
+                    // Update user row with saved ID
+                    if (userRow && userMsgId) {
+                        userRow.dataset.id = userMsgId;
+                        const uTime = userRow.querySelector(".message-time");
+                        if (uTime) uTime.textContent = formatTime(userCreatedAt || new Date());
+                    }
 
-                // Add timestamp
-                const timeEl = document.createElement("div");
-                timeEl.className = "message-time";
-                timeEl.textContent = formatTime(createdAt || new Date());
-                bodyEl.appendChild(timeEl);
+                    // Remove streaming cursor
+                    textEl.classList.remove("streaming-cursor");
 
-                // Add action buttons
-                const actionsEl = document.createElement("div");
-                actionsEl.className = "message-actions";
-                actionsEl.innerHTML = `
-                    <button class="msg-action-btn copy-btn" title="Copy">📋 Copy</button>
-                    ${messageId ? `<button class="msg-action-btn retry-btn" data-id="${messageId}" title="Retry">🔄 Retry</button>` : ""}
-                `;
-                bodyEl.appendChild(actionsEl);
+                    // Final markdown render
+                    if (typeof marked !== "undefined" && typeof DOMPurify !== "undefined") {
+                        textEl.innerHTML = DOMPurify.sanitize(marked.parse(fullResponse));
+                        // Syntax highlight code blocks
+                        if (typeof hljs !== "undefined") {
+                            textEl.querySelectorAll("pre code").forEach(block => {
+                                hljs.highlightElement(block);
+                                // Add copy button to code blocks
+                                const pre = block.parentElement;
+                                const copyBtn = document.createElement("button");
+                                copyBtn.className = "code-copy-btn";
+                                copyBtn.textContent = "Copy";
+                                copyBtn.addEventListener("click", () => {
+                                    navigator.clipboard.writeText(block.textContent).then(() => {
+                                        copyBtn.textContent = "Copied!";
+                                        setTimeout(() => copyBtn.textContent = "Copy", 1500);
+                                    });
+                                });
+                                pre.style.position = "relative";
+                                pre.appendChild(copyBtn);
+                            });
+                        }
+                    }
 
-                // Copy handler
-                actionsEl.querySelector(".copy-btn")?.addEventListener("click", () => {
-                    navigator.clipboard.writeText(fullResponse).then(() => {
-                        const btn = actionsEl.querySelector(".copy-btn");
-                        btn.textContent = "✓ Copied";
-                        setTimeout(() => (btn.textContent = "📋 Copy"), 1500);
+                    // Timestamp
+                    const timeEl = document.createElement("div");
+                    timeEl.className = "message-time";
+                    timeEl.textContent = formatTime(createdAt || new Date());
+                    bodyEl.appendChild(timeEl);
+
+                    // Action buttons
+                    const actionsEl = document.createElement("div");
+                    actionsEl.className = "message-actions";
+                    actionsEl.innerHTML = `
+                        <button class="msg-action-btn copy-btn" title="Copy">Copy</button>
+                        ${messageId ? `<button class="msg-action-btn retry-btn" data-id="${messageId}" title="Retry">Retry</button>` : ""}
+                    `;
+                    bodyEl.appendChild(actionsEl);
+
+                    actionsEl.querySelector(".copy-btn")?.addEventListener("click", () => {
+                        navigator.clipboard.writeText(fullResponse).then(() => {
+                            const btn = actionsEl.querySelector(".copy-btn");
+                            btn.textContent = "Copied!";
+                            setTimeout(() => (btn.textContent = "Copy"), 1500);
+                        });
                     });
-                });
+                    actionsEl.querySelector(".retry-btn")?.addEventListener("click", () => {
+                        retryMessage(messageId);
+                    });
 
-                // Retry handler
-                actionsEl.querySelector(".retry-btn")?.addEventListener("click", () => {
-                    retryMessage(messageId);
-                });
+                    appendSources(bodyEl, sources);
+                    await loadConversations();
+                }
 
-                appendSources(bodyEl, sources);
-
-                // Refresh sidebar
-                await loadConversations();
-            }
-
-            if (parsed.event === "error") {
-                throw new Error(payload.error || "Something went wrong");
+                if (payload.type === "error") {
+                    throw new Error(payload.error || "Something went wrong");
+                }
             }
         }
+    } catch (err) {
+        if (err.name === "AbortError") {
+            textEl.classList.remove("streaming-cursor");
+            const notice = document.createElement("div");
+            notice.className = "message-time";
+            notice.textContent = "⏹ Generation stopped";
+            bodyEl.appendChild(notice);
+        } else {
+            throw err;
+        }
+    } finally {
+        if (stopBtn) stopBtn.hidden = true;
+        currentAbortController = null;
     }
 
     return { fullResponse, sources };
-}
-
-function parseSseBlock(block) {
-    const lines = block.split("\n");
-    let event = "message";
-    const dataLines = [];
-
-    for (const line of lines) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        if (line.startsWith("data:"))  dataLines.push(line.slice(5).trim());
-    }
-
-    return { event, data: dataLines.join("\n") };
 }
 
 // ---------------------------------------------------------------------------
@@ -779,11 +872,11 @@ chatForm.addEventListener("submit", async (event) => {
     // Auto-create conversation if none selected
     if (!currentConversationId) {
         try {
-            const data = await api("/api/conversations", {
+            const data = await api("/api/chats", {
                 method: "POST",
                 body: JSON.stringify({ title: "New Chat" }),
             });
-            currentConversationId = data.conversation._id;
+            currentConversationId = data._id;
             const chatContainer = document.querySelector(".chat");
             if (chatContainer) {
                 chatContainer.classList.remove("welcome-active");
@@ -856,11 +949,11 @@ fileInput.addEventListener("change", async () => {
     try {
         // Auto-create conversation if none selected
         if (!currentConversationId) {
-            const convData = await api("/api/conversations", {
+            const convData = await api("/api/chats", {
                 method: "POST",
                 body: JSON.stringify({ title: "New Chat" }),
             });
-            currentConversationId = convData.conversation._id;
+            currentConversationId = convData._id;
             chatTitle.textContent = "New Chat";
             chatSubtitle.textContent = "Start a conversation with your AI research assistant";
             const chatContainer = document.querySelector(".chat");
@@ -944,8 +1037,9 @@ function showContextMenu(e, conversationId, alignElement = null) {
     const conv = conversations.find((c) => c._id === conversationId);
     if (!conv) return;
 
-    // Update pin label
+    // Update pin and favorite labels
     contextMenu.querySelector(".ctx-pin-label").textContent = conv.isPinned ? "Unpin" : "Pin";
+    contextMenu.querySelector(".ctx-favorite-label").textContent = conv.isFavorited ? "Unfavorite" : "Favorite";
 
     contextMenu.hidden = false;
 
@@ -1003,13 +1097,35 @@ contextMenu.querySelectorAll(".ctx-item").forEach((item) => {
                             break;
                         }
                     }
-                    await api(`/api/conversations/${contextMenuTargetId}/pin`, { method: "PUT" });
+                    await api(`/api/chats/${contextMenuTargetId}`, { method: "PATCH", body: JSON.stringify({ isPinned: !targetConv.isPinned }) });
                     await loadConversations();
+                    break;
+                }
+                case "favorite": {
+                    const targetConv = conversations.find((c) => c._id === contextMenuTargetId);
+                    if (targetConv) {
+                        await api(`/api/chats/${contextMenuTargetId}`, { method: "PATCH", body: JSON.stringify({ isFavorited: !targetConv.isFavorited }) });
+                        await loadConversations();
+                    }
+                    break;
+                }
+                case "export-markdown": {
+                    const data = await api(`/api/chats/${contextMenuTargetId}`);
+                    if (data && data.chat) {
+                        exportChatAsMarkdown(data.chat.title || "Chat Export", data.messages || []);
+                    }
+                    break;
+                }
+                case "export-json": {
+                    const data = await api(`/api/chats/${contextMenuTargetId}`);
+                    if (data && data.chat) {
+                        exportChatAsJson(data.chat.title || "Chat Export", data.messages || []);
+                    }
                     break;
                 }
                 case "delete":
                     if (confirm("Delete this conversation? This cannot be undone.")) {
-                        await api(`/api/conversations/${contextMenuTargetId}`, { method: "DELETE" });
+                        await api(`/api/chats/${contextMenuTargetId}`, { method: "DELETE" });
                         if (contextMenuTargetId === currentConversationId) {
                             currentConversationId = null;
                             chatTitle.textContent = "New Chat";
@@ -1062,8 +1178,8 @@ renameSaveBtn.addEventListener("click", async () => {
     if (!newTitle || !contextMenuTargetId) return;
 
     try {
-        await api(`/api/conversations/${contextMenuTargetId}/title`, {
-            method: "PUT",
+        await api(`/api/chats/${contextMenuTargetId}`, {
+            method: "PATCH",
             body: JSON.stringify({ title: newTitle }),
         });
 
@@ -1129,10 +1245,136 @@ function formatTime(dateStr) {
     }
 }
 
+function exportChatAsMarkdown(title, messages) {
+    let md = `# ${title}\n\n`;
+    messages.forEach((msg) => {
+        const role = msg.role === "user" ? "You" : "Assistant";
+        md += `### ${role}\n${msg.content}\n\n`;
+    });
+    downloadBlob(md, `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`, "text/markdown");
+}
+
+function exportChatAsJson(title, messages) {
+    const data = {
+        title,
+        exportedAt: new Date().toISOString(),
+        messages: messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+            createdAt: m.createdAt,
+        })),
+    };
+    downloadBlob(JSON.stringify(data, null, 2), `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.json`, "application/json");
+}
+
+function downloadBlob(content, filename, contentType) {
+    const blob = new Blob([content], { type: contentType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+// ---------------------------------------------------------------------------
+// Stop Button
+// ---------------------------------------------------------------------------
+const stopButton = document.getElementById("stopButton");
+if (stopButton) {
+    stopButton.addEventListener("click", () => {
+        if (currentAbortController) {
+            currentAbortController.abort();
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Theme Toggle
+// ---------------------------------------------------------------------------
+const themeToggleBtn = document.getElementById("themeToggleBtn");
+if (themeToggleBtn) {
+    const sunIcon = themeToggleBtn.querySelector(".sun-icon");
+    const moonIcon = themeToggleBtn.querySelector(".moon-icon");
+
+    // Load saved theme
+    const savedTheme = localStorage.getItem("theme") || "dark";
+    if (savedTheme === "light") {
+        document.body.classList.add("light-theme");
+        if (sunIcon) sunIcon.style.display = "block";
+        if (moonIcon) moonIcon.style.display = "none";
+    }
+
+    themeToggleBtn.addEventListener("click", () => {
+        const isLight = document.body.classList.toggle("light-theme");
+        localStorage.setItem("theme", isLight ? "light" : "dark");
+        if (isLight) {
+            if (sunIcon) sunIcon.style.display = "block";
+            if (moonIcon) moonIcon.style.display = "none";
+        } else {
+            if (sunIcon) sunIcon.style.display = "none";
+            if (moonIcon) moonIcon.style.display = "block";
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard Shortcuts
+// ---------------------------------------------------------------------------
+window.addEventListener("keydown", (e) => {
+    const isMod = e.ctrlKey || e.metaKey;
+    if (isMod && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        conversationSearch.focus();
+    } else if (isMod && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        newChatBtn.click();
+    } else if (e.key === "Escape") {
+        contextMenu.hidden = true;
+        renameOverlay.hidden = true;
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Warning Banner (in-memory DB)
+// ---------------------------------------------------------------------------
+const warningBanner = document.getElementById("warningBanner");
+const warningDismiss = document.getElementById("warningDismiss");
+if (warningDismiss) {
+    warningDismiss.addEventListener("click", () => {
+        if (warningBanner) warningBanner.hidden = true;
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Date Group Helper
+// ---------------------------------------------------------------------------
+function getDateGroup(dateStr) {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays <= 7) return "Previous 7 Days";
+    return "Older";
+}
+
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 (async function init() {
+    // Check health for warning banner
+    try {
+        const health = await api("/api/health");
+        if (health.database?.usingMemoryServer && warningBanner) {
+            warningBanner.hidden = false;
+        }
+    } catch {
+        // Server may not be ready yet
+    }
+
     await loadConversations();
 
     const urlParams = new URLSearchParams(window.location.search);

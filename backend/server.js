@@ -1,169 +1,118 @@
+// ============================================================================
+// server.js — Express 5 Application Entry Point
+// ============================================================================
+// Sets up the Express app with:
+//   - pino structured logging
+//   - CORS
+//   - Static file serving for the vanilla JS frontend
+//   - Clean route mounting matching the spec API surface
+//   - Legacy route compatibility
+//   - Centralized error handling (Express 5 async-friendly)
+//   - Health check endpoint surfacing memory-server status
+// ============================================================================
+
 const path = require("path");
 const express = require("express");
 const cors = require("cors");
+const pino = require("pino");
+const pinoHttp = require("pino-http");
 const config = require("./config");
-const { connectDatabase } = require("./db/connection");
-const { askQuestion, askQuestionStream } = require("../query");
-const { ingestDocument, normalizeChunkingMethod } = require("../ingest");
+const { connectDatabase, isDatabaseConnected, isUsingMemoryServer } = require("./db/connection");
+const errorHandler = require("./middleware/errorHandler");
 
-// Route imports
-const conversationRoutes = require("./routes/conversations");
-const messageRoutes = require("./routes/messages");
+// Route imports — new spec API
+const chatRoutes = require("./routes/chats");
+const searchRoutes = require("./routes/search");
+const debugRoutes = require("./routes/debug");
 const documentRoutes = require("./routes/documents");
-const memoryRoutes = require("./routes/memory");
-const analyticsRoutes = require("./routes/analytics");
+const messageRoutes = require("./routes/messages");
 
+// ---------------------------------------------------------------------------
+// Logger
+// ---------------------------------------------------------------------------
+const logger = pino({
+    level: config.log.level,
+    transport: config.nodeEnv === "development"
+        ? { target: "pino-pretty", options: { colorize: true, translateTime: "SYS:standard" } }
+        : undefined,
+});
+
+// ---------------------------------------------------------------------------
+// Express App
+// ---------------------------------------------------------------------------
 const app = express();
 
+// Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+app.use(pinoHttp({ logger, autoLogging: { ignore: (req) => req.url === "/api/health" } }));
 
 // Serve frontend static files
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
-// -----------------------------------------------------------------------
-// New REST API Routes (Phase 3)
-// -----------------------------------------------------------------------
-app.use("/api/conversations", conversationRoutes);
-app.use("/api", messageRoutes);
+// Ensure uploads directory exists
+const fs = require("fs");
+const uploadsDir = path.resolve(config.documents.uploadDir);
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// ---------------------------------------------------------------------------
+// API Routes
+// ---------------------------------------------------------------------------
+app.use("/api/chats", chatRoutes);
+app.use("/api/search", searchRoutes);
+app.use("/api/debug", debugRoutes);
 app.use("/api/documents", documentRoutes);
-app.use("/api/memory", memoryRoutes);
-app.use("/api/analytics", analyticsRoutes);
+app.use("/api", messageRoutes);
 
-function getUserMessage(req) {
-    return req.body.message?.trim();
-}
-
-function getChunkingMethod(req) {
-    return normalizeChunkingMethod(req.body.chunkingMethod);
-}
-
-function sendJsonError(res, error) {
-    res.status(error.statusCode || 500).json({
-        error: error.message || "Something went wrong",
-        sources: [],
+// Health check — surfaces database status including memory-server fallback
+app.get("/api/health", (_req, res) => {
+    res.json({
+        status: "ok",
+        timestamp: new Date().toISOString(),
+        database: {
+            connected: isDatabaseConnected(),
+            usingMemoryServer: isUsingMemoryServer(),
+        },
+        environment: config.nodeEnv,
+        chatProvider: config.chatProvider,
+        embeddingModel: config.embedding.model,
     });
-}
-
-function writeSse(res, event, data) {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-}
-
-app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Legacy endpoints — kept for backward compatibility
-app.get("/", (req, res) => {
+// Serve index.html for the root route
+app.get("/", (_req, res) => {
     res.sendFile(path.join(__dirname, "..", "frontend", "index.html"));
 });
 
-app.post("/ingest", async (req, res) => {
-    try {
-        const chunkingMethod = getChunkingMethod(req);
-        const result = await ingestDocument(undefined, { chunkingMethod });
-
-        res.json(result);
-    } catch (error) {
-        console.error(error);
-        sendJsonError(res, error);
-    }
-});
-
-app.post("/chat", async (req, res) => {
-    try {
-        const userMessage = getUserMessage(req);
-        const chunkingMethod = getChunkingMethod(req);
-
-        if (!userMessage) {
-            return res.status(400).json({
-                error: "Message is required",
-                sources: [],
-            });
-        }
-
-        const result = await askQuestion(userMessage, { chunkingMethod });
-
-        res.json({
-            response: result.answer,
-            sources: result.sources,
-            chunkingMethod: result.chunkingMethod,
-        });
-    } catch (error) {
-        console.error(error);
-        sendJsonError(res, error);
-    }
-});
-
-app.post("/chat/stream", async (req, res) => {
-    const userMessage = getUserMessage(req);
-    const chunkingMethod = getChunkingMethod(req);
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders?.();
-
-    if (!userMessage) {
-        writeSse(res, "error", {
-            error: "Message is required",
-        });
-        res.end();
-        return;
-    }
-
-    try {
-        await askQuestionStream(
-            userMessage,
-            { chunkingMethod },
-            {
-                onSources: (sources, selectedMethod) => {
-                    writeSse(res, "sources", {
-                        sources,
-                        chunkingMethod: selectedMethod,
-                    });
-                },
-                onToken: (token) => {
-                    writeSse(res, "token", {
-                        token,
-                    });
-                },
-                onDone: () => {
-                    writeSse(res, "done", {
-                        done: true,
-                    });
-                    res.end();
-                },
-            }
-        );
-    } catch (error) {
-        console.error(error);
-        writeSse(res, "error", {
-            error: error.message || "Something went wrong",
-        });
-        res.end();
-    }
-});
+// ---------------------------------------------------------------------------
+// Centralized Error Handler (must be last middleware)
+// ---------------------------------------------------------------------------
+app.use(errorHandler);
 
 // ---------------------------------------------------------------------------
-// Server Startup — Connect to MongoDB, then listen
+// Server Startup
 // ---------------------------------------------------------------------------
 async function startServer() {
     try {
         await connectDatabase();
-        console.log("[Startup] MongoDB connected.");
+        logger.info("[Startup] MongoDB connected.");
     } catch (error) {
-        console.warn(
-            "[Startup] MongoDB unavailable — running without persistence.",
-            error.message
-        );
+        logger.fatal({ err: error }, "[Startup] MongoDB connection failed fatally.");
+        process.exit(1);
     }
 
     app.listen(config.port, () => {
-        console.log(`Server running on port ${config.port}`);
+        logger.info(`Server running on http://localhost:${config.port}`);
+        logger.info(`Environment: ${config.nodeEnv}`);
+        logger.info(`Chat provider: ${config.chatProvider} (${config.ollama.chatModel})`);
+        logger.info(`Embedding model: ${config.embedding.model} (in-process)`);
+
+        if (isUsingMemoryServer()) {
+            logger.warn("⚠ Running on in-memory database — data will NOT persist across restarts!");
+        }
     });
 }
 
 startServer();
-

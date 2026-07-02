@@ -1,41 +1,43 @@
 // ============================================================================
-// services/titleGenerator.js — Auto-Generate Conversation Titles
+// services/titleGenerator.js — Auto-Generate Chat Titles
 // ============================================================================
-// After 2-3 user messages, calls Ollama to generate a concise 3-5 word title.
-// Updates the conversation in MongoDB asynchronously (non-blocking).
+// After the first user+assistant exchange, calls the LLM to generate a
+// concise 3-7 word title. Updates the chat in MongoDB asynchronously.
 // ============================================================================
 
-const axios = require("axios");
-const config = require("../config");
-const Conversation = require("../models/Conversation");
+const Chat = require("../models/Chat");
 const Message = require("../models/Message");
+const { generateCompletion } = require("./llmService");
+const config = require("../config");
+const { syncMetadata } = require("./metadataMirror");
 
 /**
- * Check if a conversation needs a title and generate one if so.
+ * Check if a chat needs a title and generate one if so.
  * Called after each new message is saved.
  *
- * @param {string} conversationId - The conversation to potentially title.
+ * @param {string} chatId - The chat to potentially title.
+ * @returns {Promise<string|null>} - The generated title, or null.
  */
-async function maybeGenerateTitle(conversationId) {
+async function maybeGenerateTitle(chatId) {
     try {
-        const conversation = await Conversation.findById(conversationId);
+        const chat = await Chat.findById(chatId);
 
-        if (!conversation || conversation.titleGenerated) {
-            return; // Already has a generated title
+        if (!chat || chat.titleGenerated) {
+            return null; // Already has a generated title
         }
 
         // Count user messages
         const userMessageCount = await Message.countDocuments({
-            conversationId,
+            chatId,
             role: "user",
         });
 
         if (userMessageCount < config.conversation.titleGenerationThreshold) {
-            return; // Not enough messages yet
+            return null; // Not enough messages yet
         }
 
         // Fetch the first few messages for context
-        const messages = await Message.find({ conversationId })
+        const messages = await Message.find({ chatId })
             .sort({ createdAt: 1 })
             .limit(6)
             .lean();
@@ -44,31 +46,15 @@ async function maybeGenerateTitle(conversationId) {
             .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
             .join("\n");
 
-        // Generate title via Ollama
-        const prompt = `Generate a concise title (3-5 words maximum) for the following conversation. Return ONLY the title, nothing else. No quotes, no punctuation at the end, no explanation.
+        // Generate title via LLM
+        const prompt = `Generate a concise title (3-7 words maximum) for the following conversation. Return ONLY the title, nothing else. No quotes, no punctuation at the end, no explanation.\n\nConversation:\n${messageTexts}\n\nTitle:`;
 
-Conversation:
-${messageTexts}
+        let title = await generateCompletion(prompt, {
+            temperature: 0.3,
+            maxTokens: 20,
+        });
 
-Title:`;
-
-        const response = await axios.post(
-            `${config.ollama.baseUrl}/api/generate`,
-            {
-                model: config.ollama.chatModel,
-                prompt,
-                stream: false,
-                options: {
-                    temperature: 0.3,
-                    num_predict: 20,
-                    num_ctx: 2048,
-                },
-            }
-        );
-
-        let title = (response.data.response || "").trim();
-
-        // Clean up: remove quotes, trailing punctuation, limit to ~5 words
+        // Clean up: remove quotes, trailing punctuation, limit words
         title = title.replace(/^["']|["']$/g, "").trim();
         title = title.replace(/[.!?]+$/, "").trim();
 
@@ -78,17 +64,23 @@ Title:`;
         }
 
         if (!title || title.length < 3) {
-            title = "Chat Conversation";
+            // Fallback: truncate the first user message
+            const firstUserMsg = messages.find((m) => m.role === "user");
+            title = firstUserMsg
+                ? firstUserMsg.content.slice(0, 40).trim()
+                : "Chat Conversation";
         }
 
-        // Update the conversation
-        await Conversation.findByIdAndUpdate(conversationId, {
+        // Update the chat
+        await Chat.findByIdAndUpdate(chatId, {
             title,
             titleGenerated: true,
         });
 
+        syncMetadata();
+
         console.log(
-            `[TitleGenerator] Generated title for ${conversationId}: "${title}"`
+            `[TitleGenerator] Generated title for ${chatId}: "${title}"`
         );
 
         return title;

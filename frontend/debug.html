@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vector Debug Dashboard — Research Assistant</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- Base Styles (shared) -->
+    <link rel="stylesheet" href="./style.css">
+    
+    <style>
+        .debug-main {
+            flex: 1;
+            min-width: 0;
+            height: 100vh;
+            display: grid;
+            grid-template-rows: auto 1fr;
+            background: var(--bg-surface);
+        }
+        
+        .debug-content {
+            padding: 24px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+        }
+        
+        .debug-selector-card {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        
+        .debug-select {
+            flex: 1;
+            max-width: 400px;
+        }
+        
+        .chunk-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 16px;
+        }
+        
+        .chunk-card {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            transition: border-color 0.2s, transform 0.2s;
+        }
+        
+        .chunk-card:hover {
+            border-color: var(--border-strong);
+            transform: translateY(-2px);
+        }
+        
+        .chunk-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-subtle);
+            padding-bottom: 8px;
+        }
+        
+        .chunk-id {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        
+        .chunk-badge {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-default);
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        
+        .chunk-badge.document {
+            border-color: var(--green);
+            color: var(--green);
+            background: var(--green-dim);
+        }
+        
+        .chunk-badge.conversation {
+            border-color: var(--accent-1);
+            color: var(--accent-1);
+            background: var(--bg-active);
+        }
+        
+        .chunk-body {
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-primary);
+            background: var(--bg-base);
+            padding: 12px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border-subtle);
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        
+        .chunk-meta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            background: rgba(0, 0, 0, 0.15);
+            padding: 12px;
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+        }
+        
+        .meta-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .meta-label {
+            color: var(--text-muted);
+            font-size: 10px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+        
+        .meta-value {
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+        }
+        
+        .vector-preview {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text-muted);
+            background: var(--bg-base);
+            padding: 8px 12px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border-subtle);
+        }
+        
+        .no-chunks {
+            text-align: center;
+            padding: 48px;
+            color: var(--text-muted);
+            background: var(--bg-elevated);
+            border-radius: var(--radius-lg);
+            border: 1px dashed var(--border-default);
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-grid"></div>
+
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-brand">
+                    <span class="brand-name">Research Assistant</span>
+                </div>
+            </div>
+            
+            <div class="sidebar-nav" style="padding: 12px;">
+                <a href="/" class="btn btn-ghost" style="justify-content: flex-start; text-decoration: none; width: 100%;">
+                    ← Back to Chat
+                </a>
+            </div>
+            
+            <div class="sidebar-footer">
+                <div class="sidebar-info">
+                    <div class="info-card">
+                        <span class="info-title">System Status</span>
+                        <span class="info-value"><span class="status-dot"></span> Online</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="debug-main">
+            <header class="chat-header">
+                <div class="header-left">
+                    <div>
+                        <h1 class="chat-title">Vector DB Chunk Inspector</h1>
+                        <p class="chat-subtitle">Inspect raw vector chunks and metadata inside ChromaDB collections</p>
+                    </div>
+                </div>
+            </header>
+
+            <div class="debug-content">
+                <!-- Chat Selector -->
+                <div class="debug-selector-card">
+                    <label class="control-label" for="chatSelect" style="margin-bottom: 0;">Select Chat:</label>
+                    <select id="chatSelect" class="select-input debug-select">
+                        <option value="">-- Choose a conversation --</option>
+                    </select>
+                </div>
+
+                <!-- Chunks Container -->
+                <div id="chunksContainer">
+                    <div class="no-chunks">Select a conversation above to inspect stored database chunks.</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="./debug.js"></script>
+</body>
+</html>

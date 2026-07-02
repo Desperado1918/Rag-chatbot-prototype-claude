@@ -59,15 +59,14 @@ async function getCollection(collectionName) {
 // Vector Retrieval: Query ChromaDB and format results
 // ---------------------------------------------------------------------------
 
-/**
- * Format raw ChromaDB query results into a consistent array of hit objects.
- */
 function formatResults(results) {
+    const ids = results.ids?.[0] || [];
     const documents = results.documents?.[0] || [];
     const metadatas = results.metadatas?.[0] || [];
     const distances = results.distances?.[0] || [];
 
     return documents.map((document, index) => ({
+        id: ids[index] || null,
         text: document,
         metadata: metadatas[index] || {},
         distance: distances[index],
@@ -164,6 +163,7 @@ function expandHierarchicalParents(childHits) {
         }
 
         parentMap.set(parentId, {
+            id: parentId,
             text: parentText,
             similarity: childHit.similarity,
             metadata: {

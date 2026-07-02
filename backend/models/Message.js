@@ -6,9 +6,9 @@ const mongoose = require("mongoose");
 
 const messageSchema = new mongoose.Schema(
     {
-        conversationId: {
+        chatId: {
             type: mongoose.Schema.Types.ObjectId,
-            ref: "Conversation",
+            ref: "Chat",
             required: true,
             index: true,
         },
@@ -21,25 +21,9 @@ const messageSchema = new mongoose.Schema(
             type: String,
             required: true,
         },
-        sources: [
-            {
-                source: String,
-                chunkingMethod: String,
-                chunkNumber: Number,
-                parentId: String,
-                parentNumber: Number,
-                matchedChildNumber: Number,
-                similarity: Number,
-                text: String,
-            },
-        ],
-        chunkingMethod: {
-            type: String,
-            default: null,
-        },
-        tokenCount: {
-            type: Number,
-            default: 0,
+        retrievedChunkIds: {
+            type: [String],
+            default: [],
         },
         isEdited: {
             type: Boolean,
@@ -56,6 +40,6 @@ const messageSchema = new mongoose.Schema(
 );
 
 // Compound index for fetching messages in a conversation efficiently
-messageSchema.index({ conversationId: 1, createdAt: 1 });
+messageSchema.index({ chatId: 1, createdAt: 1 });
 
 module.exports = mongoose.model("Message", messageSchema);
